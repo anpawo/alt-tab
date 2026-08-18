@@ -25,6 +25,11 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
     func show() {
         let window = built()
         refresh()
+        // A titled window on an .accessory app leaves the menu bar half-owned: we come to the
+        // front without having a menu bar to put there, so the previous application's stays
+        // drawn under ours. Becoming a regular app for as long as the window is open is the
+        // ordinary remedy — it costs a Dock icon while the settings are up, and nothing after.
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -160,5 +165,6 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
     /// the next launch.
     func windowWillClose(_ notification: Notification) {
         if recording != nil { stopRecording() }
+        NSApp.setActivationPolicy(.accessory)
     }
 }
