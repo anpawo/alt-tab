@@ -62,7 +62,7 @@ var statusItem: StatusItemController?
 /// type that cannot import it, and nothing calls back up.
 @MainActor
 func dispatch(_ command: SwitchCommand) {
-    if !state.isOpen, command == .next || command == .previous {
+    if !state.isOpen, command == .next {
         // Enumerate on open, once, and hand the same array to every step of the session.
         // Re-reading it per keystroke would let the list move under the selection.
         windows = WindowList.snapshot()

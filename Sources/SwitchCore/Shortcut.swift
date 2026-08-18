@@ -76,26 +76,27 @@ public struct Shortcut: Equatable, Hashable {
     ]
 }
 
-/// The three things a shortcut can be bound to. `previous` is expected to be the `next` chord
-/// plus shift, but nothing enforces that — binding them to unrelated keys works.
+/// The one thing a shortcut can be bound to.
+///
+/// An enum with a single case rather than a bare constant: it keeps the store, the recorder and
+/// the registration written against a set, so a second binding is a case and not a rewrite.
+///
+/// Cancelling is deliberately not one of them. Escape while the panel is up needs no global
+/// hotkey — the panel holds key focus, so a local monitor sees it — and a global chord for it
+/// would take a key away from every application to do something only reachable in a state that
+/// lasts half a second.
 public enum Binding: String, CaseIterable {
     case next
-    case previous
-    case cancel
 
     public var title: String {
         switch self {
         case .next: return "Switch windows"
-        case .previous: return "Go backwards"
-        case .cancel: return "Cancel"
         }
     }
 
     public var fallback: Shortcut {
         switch self {
-        case .next: return Shortcut(keyCode: 48, modifiers: .option)             // ⌥Tab
-        case .previous: return Shortcut(keyCode: 48, modifiers: [.option, .shift]) // ⇧⌥Tab
-        case .cancel: return Shortcut(keyCode: 53, modifiers: .option)            // ⌥Esc
+        case .next: return Shortcut(keyCode: 48, modifiers: .option)   // ⌥Tab
         }
     }
 }

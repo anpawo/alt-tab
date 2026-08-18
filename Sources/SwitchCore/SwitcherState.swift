@@ -6,7 +6,6 @@ import CoreGraphics
 /// future ⌘Tab emit identical streams.
 public enum SwitchCommand {
     case next
-    case previous
     case commit
     case cancel
     case abort
@@ -35,20 +34,17 @@ public struct SwitcherState {
 
     public mutating func handle(_ command: SwitchCommand, windows: [WindowInfo]) -> Effect? {
         switch command {
-        case .next, .previous:
-            let forward = command == .next
+        case .next:
             guard !windows.isEmpty else { return nil }
             guard let current = selected else {
                 // Opening. Landing on index 1 is the product: one ⌥Tab goes to the window you
                 // were on before this one, and a second brings you back.
-                let start = forward ? min(1, windows.count - 1) : windows.count - 1
+                let start = min(1, windows.count - 1)
                 selected = windows[start].id
                 return .show(windows, start)
             }
             let i = windows.firstIndex(where: { $0.id == current }) ?? 0
-            let next = forward
-                ? (i + 1) % windows.count
-                : (i - 1 + windows.count) % windows.count
+            let next = (i + 1) % windows.count
             selected = windows[next].id
             return .move(next)
 

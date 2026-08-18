@@ -1,7 +1,8 @@
 import AppKit
 import SwitchCore
 
-/// The window that appears.
+/// The window that appears: one row of application icons, the selected one lit, and the title
+/// of that window underneath.
 ///
 /// Built once at launch and never closed, only emptied and ordered out. Construction is the
 /// expensive part by an order of magnitude — tens of milliseconds against well under one to
@@ -12,16 +13,19 @@ import SwitchCore
 @MainActor
 enum Panel {
 
-    private static let rowHeight: CGFloat = 44
-    private static let width: CGFloat = 560
-    private static let padding: CGFloat = 8
-    private static let iconSide: CGFloat = 28
+    private static let maxIcon: CGFloat = 64
+    private static let minIcon: CGFloat = 30
+    private static let gap: CGFloat = 12
+    private static let padding: CGFloat = 20
+    private static let titleHeight: CGFloat = 20
 
     private static var panel: NSPanel?
-    private static var rows: [RowView] = []
+    private static var tiles: [TileView] = []
+    private static var titleField: NSTextField?
     private static var noteField: NSTextField?
     private static var icons: [pid_t: NSImage] = [:]
     private static var previousApp: NSRunningApplication?
+    private static var shown: [WindowInfo] = []
 
     /// Pays for the window, the view tree and the icon cache before anything is asked of them.
     static func warm() {
@@ -33,6 +37,7 @@ enum Panel {
 
     static func show(_ windows: [WindowInfo], selected: Int) {
         let panel = built()
+        shown = windows
         layout(windows, selected: selected)
 
         // Snapshot who had focus *before* we take it, so cancelling can put it back.
@@ -47,16 +52,16 @@ enum Panel {
     }
 
     static func move(to index: Int) {
-        for (i, row) in rows.enumerated() where !row.isHidden {
-            row.setSelected(i == index)
+        for (i, tile) in tiles.enumerated() where !tile.isHidden {
+            tile.setSelected(i == index)
         }
+        titleField?.stringValue = index < shown.count ? shown[index].title : ""
     }
 
     /// Cancel path. Focus goes back where it came from — the panel activates, so leaving it
     /// out would make Escape a way of quietly changing which app is frontmost.
     static func hide() {
-        panel?.alphaValue = 0
-        panel?.orderOut(nil)
+        orderOut()
         previousApp?.activate()
         previousApp = nil
     }
@@ -64,9 +69,16 @@ enum Panel {
     /// Commit path: the panel gets out of the way without touching focus, because the raise
     /// that follows is what decides where focus lands.
     static func dismiss() {
+        orderOut()
+        previousApp = nil
+    }
+
+    private static func orderOut() {
+        // Alpha first: ordering out goes through the WindowServer and can lag, and a panel that
+        // is still painted after the switch reads as the switch not having happened.
         panel?.alphaValue = 0
         panel?.orderOut(nil)
-        previousApp = nil
+        shown = []
     }
 
     /// The one line of text the app ever writes to the user. Cleared on the next open.
@@ -78,7 +90,7 @@ enum Panel {
     private static func built() -> NSPanel {
         if let panel { return panel }
 
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: rowHeight),
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 120),
                         styleMask: [.borderless, .fullSizeContentView],
                         backing: .buffered, defer: false)
         p.isFloatingPanel = true
@@ -102,21 +114,29 @@ enum Panel {
         background.blendingMode = .behindWindow
         background.state = .active
         background.wantsLayer = true
-        background.layer?.cornerRadius = 12
+        background.layer?.cornerRadius = 16
         background.layer?.masksToBounds = true
         p.contentView = background
 
         // A pool, because allocating views is the cost that showed up in every measurement.
-        rows = (0..<24).map { _ in
-            let row = RowView(frame: .zero)
-            row.isHidden = true
-            background.addSubview(row)
-            return row
+        tiles = (0..<24).map { _ in
+            let tile = TileView(frame: .zero)
+            tile.isHidden = true
+            background.addSubview(tile)
+            return tile
         }
+
+        let title = NSTextField(labelWithString: "")
+        title.font = .systemFont(ofSize: 13)
+        title.alignment = .center
+        title.lineBreakMode = .byTruncatingTail
+        background.addSubview(title)
+        titleField = title
 
         let note = NSTextField(labelWithString: "")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
+        note.alignment = .center
         note.isHidden = true
         background.addSubview(note)
         noteField = note
@@ -126,27 +146,45 @@ enum Panel {
     }
 
     private static func layout(_ windows: [WindowInfo], selected: Int) {
-        let shown = min(windows.count, rows.count)
-        let noteText = noteField?.stringValue ?? ""
-        let noteHeight: CGFloat = noteText.isEmpty ? 0 : 20
-        let height = CGFloat(shown) * rowHeight + padding * 2 + noteHeight
+        let count = min(windows.count, tiles.count)
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let available = screen.visibleFrame.width - 120
 
-        for (i, row) in rows.enumerated() {
-            guard i < shown else { row.isHidden = true; continue }
-            let window = windows[i]
-            row.isHidden = false
-            row.frame = NSRect(x: padding,
-                               y: height - noteHeight - padding - CGFloat(i + 1) * rowHeight,
-                               width: width - padding * 2, height: rowHeight)
-            row.fill(icon: icon(for: window.pid), title: window.title, subtitle: window.appName)
-            row.setSelected(i == selected)
+        // Icons shrink rather than the row scrolling or wrapping: a switcher you have to read
+        // twice is slower than one whose icons are small, and the selection is what you are
+        // looking at anyway.
+        var icon = maxIcon
+        if count > 0 {
+            let widest = (available - padding * 2 - gap * CGFloat(count - 1)) / CGFloat(count)
+            icon = max(minIcon, min(maxIcon, widest))
         }
 
-        noteField?.frame = NSRect(x: padding + 8, y: padding - 2,
-                                  width: width - padding * 2 - 16, height: 16)
+        let noteText = noteField?.stringValue ?? ""
+        let noteHeight: CGFloat = noteText.isEmpty ? 0 : 16
+        let row = CGFloat(count) * icon + gap * CGFloat(max(count - 1, 0))
+        // A floor on the width, because the panel is as wide as its icons and two icons is not
+        // as wide as a window title. Without it the line underneath is truncated while most of
+        // the screen sits empty beside it.
+        let width = max(row + padding * 2, min(360, available))
+        let height = padding * 2 + icon + 6 + titleHeight + noteHeight
+        let left = (width - row) / 2
+
+        for (i, tile) in tiles.enumerated() {
+            guard i < count else { tile.isHidden = true; continue }
+            tile.isHidden = false
+            tile.frame = NSRect(x: left + CGFloat(i) * (icon + gap),
+                                y: height - padding - icon,
+                                width: icon, height: icon)
+            tile.setIcon(self.icon(for: windows[i].pid))
+            tile.setSelected(i == selected)
+        }
+
+        titleField?.frame = NSRect(x: padding, y: padding + noteHeight,
+                                   width: max(width - padding * 2, 10), height: titleHeight)
+        titleField?.stringValue = selected < windows.count ? windows[selected].title : ""
+        noteField?.frame = NSRect(x: padding, y: padding - 4, width: max(width - padding * 2, 10), height: 14)
 
         guard let panel else { return }
-        let screen = NSScreen.main ?? NSScreen.screens[0]
         let frame = screen.visibleFrame
         panel.setFrame(NSRect(x: frame.midX - width / 2,
                               y: frame.midY - height / 2,
@@ -162,55 +200,39 @@ enum Panel {
         return icon
     }
 
-    /// One row. Hand-laid-out and layer-backed: the list is short, fixed-height and known in
-    /// advance, so nothing here needs a layout pass to discover its own size.
-    private final class RowView: NSView {
+    /// One application icon, and the highlight behind it.
+    ///
+    /// A bare layer rather than an `NSImageView`: the row is a fixed number of fixed-size
+    /// squares whose contents are known before it is shown, so there is nothing for AppKit's
+    /// layout, responder-chain and drag-and-drop machinery to contribute.
+    private final class TileView: NSView {
         private let iconLayer = CALayer()
-        private let titleField = NSTextField(labelWithString: "")
-        private let subtitleField = NSTextField(labelWithString: "")
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            layer?.cornerRadius = 8
+            layer?.cornerRadius = 10
             iconLayer.contentsGravity = .resizeAspect
             layer?.addSublayer(iconLayer)
-            titleField.font = .systemFont(ofSize: 13)
-            titleField.lineBreakMode = .byTruncatingTail
-            subtitleField.font = .systemFont(ofSize: 11)
-            subtitleField.textColor = .secondaryLabelColor
-            subtitleField.lineBreakMode = .byTruncatingTail
-            addSubview(titleField)
-            addSubview(subtitleField)
         }
 
         required init?(coder: NSCoder) { fatalError() }
 
         override func layout() {
             super.layout()
-            let inset: CGFloat = 8
-            // The icon slot is reserved whether or not there is an icon, so a late one never
-            // reflows the row under the pointer.
-            iconLayer.frame = CGRect(x: inset, y: (bounds.height - Panel.iconSide) / 2,
-                                     width: Panel.iconSide, height: Panel.iconSide)
-            let textX = inset * 2 + Panel.iconSide
-            let textWidth = bounds.width - textX - inset
-            titleField.frame = NSRect(x: textX, y: bounds.height / 2 - 1,
-                                      width: textWidth, height: 17)
-            subtitleField.frame = NSRect(x: textX, y: bounds.height / 2 - 17,
-                                         width: textWidth, height: 15)
+            // The icon sits inside the highlight rather than filling the tile, so the selected
+            // one reads as lit rather than as a different size from the others.
+            iconLayer.frame = bounds.insetBy(dx: 5, dy: 5)
         }
 
-        func fill(icon: NSImage?, title: String, subtitle: String) {
-            iconLayer.contents = icon
-            titleField.stringValue = title
-            subtitleField.stringValue = subtitle
+        func setIcon(_ image: NSImage?) {
+            iconLayer.contents = image
             needsLayout = true
         }
 
         func setSelected(_ selected: Bool) {
             layer?.backgroundColor = selected
-                ? NSColor.controlAccentColor.withAlphaComponent(0.30).cgColor
+                ? NSColor.white.withAlphaComponent(0.22).cgColor
                 : NSColor.clear.cgColor
         }
     }

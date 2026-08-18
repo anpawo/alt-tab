@@ -32,6 +32,60 @@ enum WindowList {
         return unsafeBitCast(sym, to: GetWindow.self)
     }()
 
+    /// Which desktop a window is on, and which desktop you are looking at.
+    ///
+    /// Accessibility already answers only about the current Space, so for a while the filter was
+    /// a side effect of that and of `.optionOnScreenOnly`. Neither is documented to mean "this
+    /// desktop", and a rule that holds by coincidence is one that breaks without warning — an
+    /// Android emulator sitting on its own Space is exactly the kind of window that turns up in
+    /// a list it was never meant to be in. So the question is now asked out loud.
+    ///
+    /// Read-only calls, which is the safe half of this surface: reads on other applications'
+    /// windows succeed, writes are silently refused to anyone but the Dock.
+    private typealias MainConnection = @convention(c) () -> Int32
+    private typealias SpacesForWindows = @convention(c) (Int32, UInt32, CFArray) -> Unmanaged<CFArray>?
+    private typealias ActiveDisplay = @convention(c) (Int32) -> Unmanaged<CFString>?
+    private typealias CurrentSpace = @convention(c) (Int32, CFString) -> UInt64
+
+    private static let coreGraphics = dlopen(
+        "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY)
+
+    private static func symbol<T>(_ name: String, as type: T.Type) -> T? {
+        guard let coreGraphics, let sym = dlsym(coreGraphics, name) else { return nil }
+        return unsafeBitCast(sym, to: T.self)
+    }
+
+    /// Loaded by name rather than declared, so a macOS that renames one of these degrades to
+    /// "no Space filter" instead of refusing to launch.
+    private static let mainConnection = symbol("CGSMainConnectionID", as: MainConnection.self)
+    private static let spacesForWindows = symbol("CGSCopySpacesForWindows", as: SpacesForWindows.self)
+    private static let activeDisplay = symbol("CGSCopyActiveMenuBarDisplayIdentifier", as: ActiveDisplay.self)
+    private static let currentSpace = symbol("CGSManagedDisplayGetCurrentSpace", as: CurrentSpace.self)
+
+    /// The windows, of those given, that are on the desktop currently being looked at.
+    ///
+    /// Returns everything when the Space cannot be determined: a filter that fails closed would
+    /// empty the switcher, and a switcher showing one window too many still switches.
+    private static func onCurrentSpace(_ ids: [CGWindowID]) -> Set<CGWindowID> {
+        guard let mainConnection, let spacesForWindows, let activeDisplay, let currentSpace,
+              !ids.isEmpty else { return Set(ids) }
+        let connection = mainConnection()
+        guard let display = activeDisplay(connection)?.takeRetainedValue() else { return Set(ids) }
+        let here = currentSpace(connection, display)
+        guard here != 0 else { return Set(ids) }
+
+        var kept: Set<CGWindowID> = []
+        for id in ids {
+            let one = [NSNumber(value: id)] as CFArray
+            // 0x7 asks for every kind of Space membership, so a window parked on a fullscreen
+            // desktop answers as honestly as one on an ordinary desktop.
+            guard let spaces = spacesForWindows(connection, 0x7, one)?.takeRetainedValue()
+                    as? [NSNumber] else { continue }
+            if spaces.contains(where: { $0.uint64Value == here }) { kept.insert(id) }
+        }
+        return kept
+    }
+
     /// One element per process, kept alive for the life of the app.
     ///
     /// The warmth is in the mach port between the two processes, not in the object: a freshly
@@ -84,6 +138,10 @@ enum WindowList {
                 ordered.append((id, pid))
             }
         }
+        guard !ordered.isEmpty else { return [] }
+
+        let here = onCurrentSpace(ordered.map(\.id))
+        ordered.removeAll { !here.contains($0.id) }
         guard !ordered.isEmpty else { return [] }
 
         // Snapshot main-owned state before leaving the main thread.

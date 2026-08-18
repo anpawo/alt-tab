@@ -60,15 +60,6 @@ scenario("stepping past the end comes back to the start") {
     expect(list[index].id == list[0].id, "did not wrap around")
 }
 
-scenario("going backwards from idle reaches the far end") {
-    let list = windows(3)
-    var state = SwitcherState()
-    guard case let .show(_, index)? = state.handle(.previous, windows: list) else {
-        return expect(false, "opening produced no panel")
-    }
-    expect(list[index].id == list[2].id, "did not open on the last window")
-}
-
 scenario("a single window is still selectable") {
     var state = SwitcherState()
     guard case let .show(_, index)? = state.handle(.next, windows: windows(1)) else {
@@ -174,10 +165,9 @@ scenario("chords are written the way macOS writes them") {
     expect(Shortcut(keyCode: 12, modifiers: [.command, .control]).label == "⌃⌘Q", "⌃⌘Q mislabelled")
 }
 
-scenario("the defaults are the three documented chords") {
-    expect(Binding.next.fallback.label == "⌥Tab", "default next changed")
-    expect(Binding.previous.fallback.label == "⌥⇧Tab", "default previous changed")
-    expect(Binding.cancel.fallback.label == "⌥Esc", "default cancel changed")
+scenario("there is one binding, and its default is ⌥Tab") {
+    expect(Binding.allCases.count == 1, "a binding came back")
+    expect(Binding.next.fallback.label == "⌥Tab", "the default changed")
     expect(Binding.allCases.allSatisfy { $0.fallback.isValid && !$0.fallback.isClaimedByMacOS },
            "a default is unusable")
 }

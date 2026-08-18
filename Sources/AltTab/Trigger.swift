@@ -26,6 +26,7 @@ enum Trigger {
     private static var refs: [EventHotKeyRef?] = []
     private static var handler: EventHandlerRef?
     private static var monitor: Any?
+    private static var escape: Any?
 
     /// Which modifier, once released, means "go". Read from whatever `next` is currently bound
     /// to, so rebinding the chord rebinds the release along with it.
@@ -47,6 +48,17 @@ enum Trigger {
             return noErr
         }, 1, &spec, nil, &handler)
         guard installed == noErr else { return false }
+
+        // Escape backs out, without costing a global hotkey: the panel holds key focus while it
+        // is up, so a local monitor is enough, and a chord registered system-wide would take a
+        // key from every application for something reachable only in this half-second.
+        escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53,
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
+            else { return event }
+            emit?(.cancel)
+            return nil
+        }
 
         // Commit is the hold modifier coming back up. A local monitor sees it because the panel
         // is key; it needs no grant, and returning the event leaves normal typing untouched.
@@ -70,7 +82,7 @@ enum Trigger {
     static func apply(_ shortcuts: [Binding: Shortcut]) -> Bool {
         suspend()
 
-        let commands: [Binding: SwitchCommand] = [.next: .next, .previous: .previous, .cancel: .cancel]
+        let commands: [Binding: SwitchCommand] = [.next: .next]
         var ok = true
         for (index, binding) in Binding.allCases.enumerated() {
             guard let shortcut = shortcuts[binding], shortcut.isValid else { continue }

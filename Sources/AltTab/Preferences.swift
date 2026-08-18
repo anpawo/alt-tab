@@ -39,16 +39,19 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
         if let window { return window }
 
         let width: CGFloat = 430
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 224),
+        // Derived from the number of bindings rather than fixed, so adding one is a case in the
+        // enum and not a second set of coordinates to keep in step.
+        let height = 112 + CGFloat(Binding.allCases.count) * 38
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                               styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = "alt-tab"
         window.isReleasedWhenClosed = false
         window.delegate = self
 
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 224))
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
 
-        var y: CGFloat = 168
+        var y: CGFloat = height - 54
         for binding in Binding.allCases {
             let label = NSTextField(labelWithString: binding.title)
             label.frame = NSRect(x: 24, y: y + 4, width: 180, height: 18)
