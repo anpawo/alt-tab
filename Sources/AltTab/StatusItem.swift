@@ -67,6 +67,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSApp.terminate(nil)
     }
 
+    /// Both, because neither alone lands the user anywhere useful: the request puts the prompt
+    /// up the first time and does nothing ever after, and the pane is the only route once it has
+    /// been answered. The answer is latched for the life of the process either way, so this says
+    /// so rather than pretending pictures will appear.
+    @objc private func requestScreenRecording() {
+        Thumbnails.requestAccess()
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+        NSWorkspace.shared.open(url)
+        let alert = NSAlert()
+        alert.messageText = "Quit and reopen alt-tab once it is allowed"
+        alert.informativeText = "macOS answers this question once per launch, so window pictures "
+            + "start appearing at the next one."
+        alert.runModal()
+    }
+
     @objc private func openAccessibilitySettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
         NSWorkspace.shared.open(url)
@@ -93,6 +108,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             // with no window names and cannot raise anything, which otherwise just looks broken.
             let entry = NSMenuItem(title: "Needs Accessibility…",
                                    action: #selector(openAccessibilitySettings), keyEquivalent: "")
+            entry.target = self
+            menu.addItem(entry)
+        }
+
+        if AXIsProcessTrusted() && !Thumbnails.isPermitted {
+            let entry = NSMenuItem(title: "Needs Screen Recording…",
+                                   action: #selector(requestScreenRecording), keyEquivalent: "")
             entry.target = self
             menu.addItem(entry)
         }

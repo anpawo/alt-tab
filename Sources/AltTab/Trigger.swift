@@ -27,6 +27,7 @@ enum Trigger {
     private static var handler: EventHandlerRef?
     private static var monitor: Any?
     private static var escape: Any?
+    private static var release: Timer?
 
     /// Which modifier, once released, means "go". Read from whatever `next` is currently bound
     /// to, so rebinding the chord rebinds the release along with it.
@@ -111,6 +112,43 @@ enum Trigger {
         for ref in refs where ref != nil { UnregisterEventHotKey(ref) }
         refs.removeAll()
         commandForID.removeAll()
+    }
+
+    /// Watches for the held modifier to come back up, by asking rather than by being told.
+    ///
+    /// The local monitor above is the fast path and cannot be the only one: it delivers events
+    /// only while this app is active, activation is asynchronous, and the race is genuinely lost
+    /// some of the time — measured, not feared. When it is lost nothing ever reports the release
+    /// and the panel stays up for good, which is the one failure a switcher cannot have.
+    ///
+    /// `flagsState` is the live state of the keyboard, readable from a background process with
+    /// no grant of any kind. Polling it costs a timer for the half-second the panel is up.
+    static func watchForRelease() {
+        release?.invalidate()
+        release = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                let held = CGEventSource.flagsState(.combinedSessionState)
+                guard !held.contains(carbonFlag(holdModifier)) else { return }
+                stopWatchingForRelease()
+                emit?(.commit)
+            }
+        }
+        // Common mode, or the timer stops for as long as a menu or a scroll is being tracked —
+        // which is exactly when a switch is most likely to be in flight.
+        RunLoop.main.add(release!, forMode: .common)
+    }
+
+    static func stopWatchingForRelease() {
+        release?.invalidate()
+        release = nil
+    }
+
+    private static func carbonFlag(_ modifier: NSEvent.ModifierFlags) -> CGEventFlags {
+        switch modifier {
+        case .command: return .maskCommand
+        case .control: return .maskControl
+        default: return .maskAlternate
+        }
     }
 
     private static func carbonModifiers(_ modifiers: Modifiers) -> UInt32 {

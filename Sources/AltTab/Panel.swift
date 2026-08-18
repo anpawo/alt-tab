@@ -1,8 +1,13 @@
 import AppKit
 import SwitchCore
 
-/// The window that appears: one row of application icons, the selected one lit, and the title
-/// of that window underneath.
+/// The window that appears: one row of window pictures, the selected one lit, and the title of
+/// that window underneath.
+///
+/// The pictures arrive after the panel does. A capture costs 45–50 ms each and the panel has a
+/// budget of a few, so every tile is drawn immediately with the application icon and repainted
+/// when its own picture lands — the slot is reserved at full size from the first frame, so
+/// nothing moves under the eye when it does.
 ///
 /// Built once at launch and never closed, only emptied and ordered out. Construction is the
 /// expensive part by an order of magnitude — tens of milliseconds against well under one to
@@ -13,8 +18,9 @@ import SwitchCore
 @MainActor
 enum Panel {
 
-    private static let maxIcon: CGFloat = 64
-    private static let minIcon: CGFloat = 30
+    private static let maxTile: CGFloat = 176
+    private static let minTile: CGFloat = 96
+    private static let aspect: CGFloat = 110.0 / 176.0
     private static let gap: CGFloat = 12
     private static let padding: CGFloat = 20
     private static let titleHeight: CGFloat = 20
@@ -26,6 +32,9 @@ enum Panel {
     private static var icons: [pid_t: NSImage] = [:]
     private static var previousApp: NSRunningApplication?
     private static var shown: [WindowInfo] = []
+    /// Which round of captures the tiles currently belong to. A picture that arrives after the
+    /// panel has moved on is for a window that is no longer in that slot.
+    private static var round = 0
 
     /// Pays for the window, the view tree and the icon cache before anything is asked of them.
     static func warm() {
@@ -33,12 +42,14 @@ enum Panel {
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             icons[app.processIdentifier] = app.icon
         }
+        Thumbnails.warm()
     }
 
     static func show(_ windows: [WindowInfo], selected: Int) {
         let panel = built()
         shown = windows
         layout(windows, selected: selected)
+        requestPictures(for: windows)
 
         // Snapshot who had focus *before* we take it, so cancelling can put it back.
         previousApp = NSWorkspace.shared.frontmostApplication
@@ -90,9 +101,9 @@ enum Panel {
     private static func built() -> NSPanel {
         if let panel { return panel }
 
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 120),
-                        styleMask: [.borderless, .fullSizeContentView],
-                        backing: .buffered, defer: false)
+        let p = SwitcherPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 120),
+                              styleMask: [.borderless, .fullSizeContentView],
+                              backing: .buffered, defer: false)
         p.isFloatingPanel = true
         p.level = .popUpMenu
         p.hidesOnDeactivate = false
@@ -150,32 +161,36 @@ enum Panel {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let available = screen.visibleFrame.width - 120
 
-        // Icons shrink rather than the row scrolling or wrapping: a switcher you have to read
-        // twice is slower than one whose icons are small, and the selection is what you are
+        // Tiles shrink rather than the row wrapping or scrolling: a switcher you have to read
+        // twice is slower than one whose pictures are small, and the selection is what you are
         // looking at anyway.
-        var icon = maxIcon
+        var tileWidth = maxTile
         if count > 0 {
             let widest = (available - padding * 2 - gap * CGFloat(count - 1)) / CGFloat(count)
-            icon = max(minIcon, min(maxIcon, widest))
+            tileWidth = max(minTile, min(maxTile, widest))
         }
+        let tileHeight = (tileWidth * aspect).rounded()
 
         let noteText = noteField?.stringValue ?? ""
         let noteHeight: CGFloat = noteText.isEmpty ? 0 : 16
-        let row = CGFloat(count) * icon + gap * CGFloat(max(count - 1, 0))
-        // A floor on the width, because the panel is as wide as its icons and two icons is not
-        // as wide as a window title. Without it the line underneath is truncated while most of
-        // the screen sits empty beside it.
-        let width = max(row + padding * 2, min(360, available))
-        let height = padding * 2 + icon + 6 + titleHeight + noteHeight
+        let row = CGFloat(count) * tileWidth + gap * CGFloat(max(count - 1, 0))
+        // A floor on the width, because the panel is as wide as its tiles and one tile is not as
+        // wide as a window title. Without it the line underneath is truncated while most of the
+        // screen sits empty beside it.
+        let width = max(row + padding * 2, min(380, available))
+        let height = padding * 2 + tileHeight + 8 + titleHeight + noteHeight
         let left = (width - row) / 2
 
         for (i, tile) in tiles.enumerated() {
             guard i < count else { tile.isHidden = true; continue }
             tile.isHidden = false
-            tile.frame = NSRect(x: left + CGFloat(i) * (icon + gap),
-                                y: height - padding - icon,
-                                width: icon, height: icon)
+            tile.frame = NSRect(x: left + CGFloat(i) * (tileWidth + gap),
+                                y: height - padding - tileHeight,
+                                width: tileWidth, height: tileHeight)
             tile.setIcon(self.icon(for: windows[i].pid))
+            // Yesterday's picture, if there is one, so a window that has not changed is never
+            // shown as a blank slot while it is re-captured.
+            tile.setPicture(Thumbnails.cached(windows[i].id))
             tile.setSelected(i == selected)
         }
 
@@ -193,6 +208,19 @@ enum Panel {
         panel.alphaValue = 1
     }
 
+    /// Asks for fresh pictures, and drops any that arrive for a panel that has since closed or
+    /// been rebuilt with a different set of windows.
+    private static func requestPictures(for windows: [WindowInfo]) {
+        guard Thumbnails.isPermitted else { return }
+        let ids = windows.map(\.id)
+        Thumbnails.capture(ids) { id, image, generation in
+            guard generation == round, let index = shown.firstIndex(where: { $0.id == id }),
+                  index < tiles.count else { return }
+            tiles[index].setPicture(image)
+        }
+        round += 1
+    }
+
     private static func icon(for pid: pid_t) -> NSImage? {
         if let cached = icons[pid] { return cached }
         let icon = NSRunningApplication(processIdentifier: pid)?.icon
@@ -200,19 +228,36 @@ enum Panel {
         return icon
     }
 
-    /// One application icon, and the highlight behind it.
+    /// AppKit refuses key focus to a borderless window unless it is asked for by name, and the
+    /// refusal is silent. Without this the panel takes no keyboard focus at all, and Escape
+    /// never reaches it. Committing does not depend on this — see `Trigger.watchForRelease`,
+    /// which exists because focus is exactly the thing that cannot be relied on here.
+    private final class SwitcherPanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+        // Main is a different thing: it decides which window owns the menu bar and the document
+        // proxy, neither of which a transient panel should take.
+        override var canBecomeMain: Bool { false }
+    }
+
+    /// One window: its picture, its application icon in the corner, and the highlight behind it.
     ///
-    /// A bare layer rather than an `NSImageView`: the row is a fixed number of fixed-size
-    /// squares whose contents are known before it is shown, so there is nothing for AppKit's
-    /// layout, responder-chain and drag-and-drop machinery to contribute.
+    /// Bare layers rather than `NSImageView`s: the row is a fixed number of fixed-size tiles
+    /// whose contents are known before it is shown, so there is nothing for AppKit's layout,
+    /// responder-chain and drag-and-drop machinery to contribute.
     private final class TileView: NSView {
+        private let pictureLayer = CALayer()
         private let iconLayer = CALayer()
+        private var hasPicture = false
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
             layer?.cornerRadius = 10
+            pictureLayer.contentsGravity = .resizeAspect
+            pictureLayer.cornerRadius = 6
+            pictureLayer.masksToBounds = true
             iconLayer.contentsGravity = .resizeAspect
+            layer?.addSublayer(pictureLayer)
             layer?.addSublayer(iconLayer)
         }
 
@@ -220,13 +265,28 @@ enum Panel {
 
         override func layout() {
             super.layout()
-            // The icon sits inside the highlight rather than filling the tile, so the selected
-            // one reads as lit rather than as a different size from the others.
-            iconLayer.frame = bounds.insetBy(dx: 5, dy: 5)
+            pictureLayer.frame = bounds.insetBy(dx: 6, dy: 6)
+            let badge = min(bounds.height * 0.27, 30)
+            if hasPicture {
+                // Tucked into the corner of the picture, big enough to name the application at a
+                // glance without covering what the picture is for.
+                iconLayer.frame = CGRect(x: bounds.maxX - badge - 4, y: 4, width: badge, height: badge)
+            } else {
+                // Nothing to sit on yet, so the icon *is* the tile.
+                let side = min(bounds.height, bounds.width) - 16
+                iconLayer.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2,
+                                         width: side, height: side)
+            }
         }
 
         func setIcon(_ image: NSImage?) {
             iconLayer.contents = image
+            needsLayout = true
+        }
+
+        func setPicture(_ image: NSImage?) {
+            pictureLayer.contents = image
+            hasPicture = image != nil
             needsLayout = true
         }
 

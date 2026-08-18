@@ -66,19 +66,29 @@ func dispatch(_ command: SwitchCommand) {
         // Enumerate on open, once, and hand the same array to every step of the session.
         // Re-reading it per keystroke would let the list move under the selection.
         windows = WindowList.snapshot()
-        Panel.note(AXIsProcessTrusted() ? nil
-                   : "No Accessibility grant — window names and switching are unavailable.")
+        if !AXIsProcessTrusted() {
+            Panel.note("No Accessibility grant — window names and switching are unavailable.")
+        } else if !Thumbnails.isPermitted {
+            // Said here rather than by putting a system prompt over a switcher the user is in
+            // the middle of using. The menu bar item is where it can be granted.
+            Panel.note("Showing icons — window pictures need Screen Recording, in the ⇥ menu.")
+        } else {
+            Panel.note(nil)
+        }
     }
 
     guard let effect = state.handle(command, windows: windows) else { return }
     switch effect {
     case let .show(list, index):
         Panel.show(list, selected: index)
+        Trigger.watchForRelease()
     case let .move(index):
         Panel.move(to: index)
     case .hide:
+        Trigger.stopWatchingForRelease()
         Panel.hide()
     case let .raise(window):
+        Trigger.stopWatchingForRelease()
         Panel.dismiss()
         if !Raise.perform(window) {
             // Hangs off the failed *action*, not off the permission check: the check can
