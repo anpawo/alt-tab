@@ -133,5 +133,54 @@ scenario("our own panel is never in our own list") {
     expect(Filter.isForeign(ownerPID: 43, selfPID: 42), "dropped somebody else's window")
 }
 
+private let tab: UInt16 = 48
+private let escape: UInt16 = 53
+private let backtick: UInt16 = 50
+
+scenario("the modifier that commits is never shift") {
+    // Shift is how you say "the other way", so a chord holding it would commit the moment you
+    // reversed direction.
+    expect(Shortcut(keyCode: tab, modifiers: [.option, .shift]).holdModifier == .option,
+           "shift won over option")
+    expect(Shortcut(keyCode: tab, modifiers: [.command, .shift]).holdModifier == .command,
+           "shift won over command")
+    expect(Shortcut(keyCode: tab, modifiers: .shift).holdModifier == nil,
+           "shift alone was accepted as holdable")
+}
+
+scenario("a chord with nothing to hold is refused") {
+    // Not a nicety: these are global hotkeys, so a bare key would be taken from every app.
+    expect(!Shortcut(keyCode: tab, modifiers: []).isValid, "bare Tab was accepted")
+    expect(!Shortcut(keyCode: tab, modifiers: .shift).isValid, "⇧Tab was accepted")
+    expect(Shortcut(keyCode: tab, modifiers: .option).isValid, "⌥Tab was refused")
+    expect(Shortcut(keyCode: escape, modifiers: .control).isValid, "⌃Esc was refused")
+}
+
+scenario("the chords macOS keeps for itself are recognised") {
+    // Registering one of these succeeds and then never fires, which reads as our own bug.
+    expect(Shortcut(keyCode: tab, modifiers: .command).isClaimedByMacOS, "⌘Tab not flagged")
+    expect(Shortcut(keyCode: tab, modifiers: [.command, .shift]).isClaimedByMacOS, "⌘⇧Tab not flagged")
+    expect(Shortcut(keyCode: backtick, modifiers: .command).isClaimedByMacOS, "⌘` not flagged")
+    expect(!Shortcut(keyCode: tab, modifiers: .option).isClaimedByMacOS, "⌥Tab wrongly flagged")
+    expect(!Shortcut(keyCode: tab, modifiers: [.command, .option]).isClaimedByMacOS,
+           "⌥⌘Tab wrongly flagged — macOS only claims the plain and shifted forms")
+}
+
+scenario("chords are written the way macOS writes them") {
+    expect(Shortcut(keyCode: tab, modifiers: .option).label == "⌥Tab", "⌥Tab mislabelled")
+    // Apple's canonical order is ⌃⌥⇧⌘, whatever order they were pressed in.
+    expect(Shortcut(keyCode: tab, modifiers: [.shift, .option]).label == "⌥⇧Tab", "⌥⇧Tab mislabelled")
+    expect(Shortcut(keyCode: escape, modifiers: .option).label == "⌥Esc", "⌥Esc mislabelled")
+    expect(Shortcut(keyCode: 12, modifiers: [.command, .control]).label == "⌃⌘Q", "⌃⌘Q mislabelled")
+}
+
+scenario("the defaults are the three documented chords") {
+    expect(Binding.next.fallback.label == "⌥Tab", "default next changed")
+    expect(Binding.previous.fallback.label == "⌥⇧Tab", "default previous changed")
+    expect(Binding.cancel.fallback.label == "⌥Esc", "default cancel changed")
+    expect(Binding.allCases.allSatisfy { $0.fallback.isValid && !$0.fallback.isClaimedByMacOS },
+           "a default is unusable")
+}
+
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

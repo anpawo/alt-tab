@@ -61,6 +61,7 @@ launchctl kickstart -k "gui/$UID/$LABEL"
 
 echo
 echo "Installed. ⌥Tab switches windows; ⇧⌥Tab goes back; ⌥Esc cancels."
+echo "The ⇥ key in the menu bar means it is running — click it to rebind those."
 echo
 echo "The first time you commit a switch, macOS will ask for Accessibility."
 echo "Until it is granted the panel lists applications without window names,"

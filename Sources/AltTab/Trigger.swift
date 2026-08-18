@@ -3,8 +3,9 @@ import Carbon.HIToolbox
 import SwitchCore
 
 // The Carbon callback is a C function pointer and so may capture nothing — not even an
-// actor-isolated static — which is why this is a plain global.
+// actor-isolated static — which is why these are plain globals.
 private nonisolated(unsafe) var emit: ((SwitchCommand) -> Void)?
+private nonisolated(unsafe) var commandForID: [UInt32: SwitchCommand] = [:]
 
 /// Where key presses come from.
 ///
@@ -18,14 +19,17 @@ private nonisolated(unsafe) var emit: ((SwitchCommand) -> Void)?
 /// panel takes key focus while it is up.
 ///
 /// Note the vocabulary this hands upwards: `.next`, never `.open`. The trigger holds no state
-/// and cannot tell the first Tab from the third, so swapping ⌥ for ⌘ later is a keycode
-/// change in this file and nothing more.
+/// and cannot tell the first Tab from the third, so rebinding ⌥ to ⌘ is a number in a table.
 @MainActor
 enum Trigger {
 
     private static var refs: [EventHotKeyRef?] = []
     private static var handler: EventHandlerRef?
     private static var monitor: Any?
+
+    /// Which modifier, once released, means "go". Read from whatever `next` is currently bound
+    /// to, so rebinding the chord rebinds the release along with it.
+    private static var holdModifier: NSEvent.ModifierFlags = .option
 
     @discardableResult
     static func install(_ block: @escaping (SwitchCommand) -> Void) -> Bool {
@@ -38,42 +42,79 @@ enum Trigger {
             GetEventParameter(event, EventParamName(kEventParamDirectObject),
                               EventParamType(typeEventHotKeyID), nil,
                               MemoryLayout<EventHotKeyID>.size, nil, &id)
-            let command: SwitchCommand
-            switch id.id {
-            case 1: command = .next
-            case 2: command = .previous
-            default: command = .cancel
-            }
+            guard let command = commandForID[id.id] else { return noErr }
             DispatchQueue.main.async { emit?(command) }
             return noErr
         }, 1, &spec, nil, &handler)
         guard installed == noErr else { return false }
 
-        // ⌥Tab, ⇧⌥Tab, ⌥Esc. Carbon fires once per physical press and ignores the OS auto-repeat,
-        // so holding Tab down does not cycle — each step is its own tap. That is the behaviour
-        // asked for; synthesising a repeat would mean reading the user's key-repeat settings and
-        // gating every tick on the panel being painted.
-        let chords: [(UInt32, UInt32, UInt32)] = [
-            (UInt32(kVK_Tab), UInt32(optionKey), 1),
-            (UInt32(kVK_Tab), UInt32(optionKey | shiftKey), 2),
-            (UInt32(kVK_Escape), UInt32(optionKey), 3),
-        ]
-        for (key, modifiers, id) in chords {
+        // Commit is the hold modifier coming back up. A local monitor sees it because the panel
+        // is key; it needs no grant, and returning the event leaves normal typing untouched.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            // Cleaned before comparing: local monitors emit bits nobody asked for, including
+            // the function-key bit, and a raw equality test against them never matches.
+            let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if !held.contains(holdModifier) { emit?(.commit) }
+            return event
+        }
+
+        return apply(Shortcuts.current())
+    }
+
+    /// Registers a set of chords, replacing whatever was registered before.
+    ///
+    /// Carbon hands a chord to the first claimant, so re-binding means genuinely giving the old
+    /// one back — an unregister that is skipped shows up as a shortcut that still works after
+    /// the user changed it.
+    @discardableResult
+    static func apply(_ shortcuts: [Binding: Shortcut]) -> Bool {
+        suspend()
+
+        let commands: [Binding: SwitchCommand] = [.next: .next, .previous: .previous, .cancel: .cancel]
+        var ok = true
+        for (index, binding) in Binding.allCases.enumerated() {
+            guard let shortcut = shortcuts[binding], shortcut.isValid else { continue }
+            let id = UInt32(index + 1)
             var ref: EventHotKeyRef?
-            let hotKeyID = EventHotKeyID(signature: OSType(0x5441_434B), id: id)   // 'TACK'
-            guard RegisterEventHotKey(key, modifiers, hotKeyID,
-                                      GetEventDispatcherTarget(), 0, &ref) == noErr else {
-                return false
-            }
+            let registered = RegisterEventHotKey(UInt32(shortcut.keyCode),
+                                                 carbonModifiers(shortcut.modifiers),
+                                                 EventHotKeyID(signature: OSType(0x4154_4221), id: id),  // 'ATB!'
+                                                 GetEventDispatcherTarget(), 0, &ref)
+            guard registered == noErr else { ok = false; continue }
+            commandForID[id] = commands[binding]
             refs.append(ref)
         }
 
-        // Commit is ⌥ coming back up. A local monitor sees it because the panel is key; it
-        // needs no grant, and returning the event leaves normal typing untouched.
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-            if !event.modifierFlags.contains(.option) { emit?(.commit) }
-            return event
+        if let next = shortcuts[.next], let hold = next.holdModifier {
+            holdModifier = appKitModifier(hold)
         }
-        return true
+        return ok
+    }
+
+    /// Hands every chord back to the system.
+    ///
+    /// Used while recording a new one: without it, pressing the chord being replaced fires the
+    /// switcher instead of being recorded, and the panel opens over the window asking for it.
+    static func suspend() {
+        for ref in refs where ref != nil { UnregisterEventHotKey(ref) }
+        refs.removeAll()
+        commandForID.removeAll()
+    }
+
+    private static func carbonModifiers(_ modifiers: Modifiers) -> UInt32 {
+        var carbon: Int = 0
+        if modifiers.contains(.command) { carbon |= cmdKey }
+        if modifiers.contains(.option)  { carbon |= optionKey }
+        if modifiers.contains(.shift)   { carbon |= shiftKey }
+        if modifiers.contains(.control) { carbon |= controlKey }
+        return UInt32(carbon)
+    }
+
+    private static func appKitModifier(_ modifier: Modifiers) -> NSEvent.ModifierFlags {
+        switch modifier {
+        case .command: return .command
+        case .control: return .control
+        default: return .option
+        }
     }
 }

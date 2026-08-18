@@ -55,6 +55,8 @@ application.setActivationPolicy(.accessory)
 
 var state = SwitcherState()
 var windows: [WindowInfo] = []
+// Held for the process lifetime: an NSStatusItem lives exactly as long as whatever owns it.
+var statusItem: StatusItemController?
 
 /// The only place both worlds meet. Everything above is AppKit, everything below is a value
 /// type that cannot import it, and nothing calls back up.
@@ -96,6 +98,7 @@ func dispatch(_ command: SwitchCommand) {
 MainActor.assumeIsolated {
     Panel.warm()
     WindowList.prewarm()
+    statusItem = StatusItemController()
 
     guard Trigger.install({ command in dispatch(command) }) else {
         FileHandle.standardError.write(Data("alt-tab: could not register ⌥Tab — another app owns it\n".utf8))
@@ -104,6 +107,11 @@ MainActor.assumeIsolated {
 
     if arguments.contains("--fake") {
         dispatch(.next)
+    }
+    // There is no Dock icon to click, so the menu bar is normally the only way in. This is the
+    // other one, for when the menu bar is full.
+    if arguments.contains("--settings") {
+        PreferencesWindow.shared.show()
     }
 }
 
