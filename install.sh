@@ -31,8 +31,14 @@ cat > "$PLIST" <<PLIST_EOF
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
+	<!-- Restarted when it dies unexpectedly, left alone when it exits on purpose — which is
+	     what it does when another copy already holds the single-instance lock, and what the
+	     menu bar's Quit relies on. Plain KeepAlive would fight both. -->
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
 	<!-- Without this, System Settings lists the login item under the developer's name
 	     instead of the app's. -->
 	<key>AssociatedBundleIdentifiers</key>

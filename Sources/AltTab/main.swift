@@ -33,6 +33,25 @@ enum SymbolicHotKeys {
 
 let arguments = Set(CommandLine.arguments.dropFirst())
 
+/// Refuses to be the second copy.
+///
+/// Two of these running is not a cosmetic problem. Carbon gives a hotkey to the first process
+/// that claims it, so a forgotten copy keeps ⌥Tab while the one you are looking at silently
+/// does nothing — and if that copy is a bare binary rather than the signed bundle, it has no
+/// Screen Recording grant of its own and every picture comes back black. Both symptoms, one
+/// cause, and nothing about either points at the real reason.
+///
+/// A file lock rather than a check of the running applications: an executable launched outside
+/// a bundle has no identifier to be counted by, and that is exactly the copy that causes this.
+func claimSoleInstance() -> Bool {
+    let path = NSHomeDirectory() + "/Library/Application Support/com.mr.alttab.lock"
+    let descriptor = open(path, O_CREAT | O_RDWR, 0o600)
+    guard descriptor >= 0 else { return true }   // cannot lock, carry on rather than refuse to run
+    // Held for the life of the process, and released by the kernel however it ends — including
+    // a kill, which a lock file with a pid in it would not survive.
+    return flock(descriptor, LOCK_EX | LOCK_NB) == 0
+}
+
 if arguments.contains("--restore-hotkeys") {
     SymbolicHotKeys.restoreSystemSwitcher()
     exit(0)
@@ -46,6 +65,11 @@ if arguments.contains("--render") {
             print("\(i)  \(window.appName) — \(window.title)  [wid \(window.id), \(handle)]")
         }
     }
+    exit(0)
+}
+
+guard claimSoleInstance() else {
+    FileHandle.standardError.write(Data("alt-tab: already running\n".utf8))
     exit(0)
 }
 
