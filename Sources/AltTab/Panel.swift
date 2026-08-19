@@ -66,9 +66,20 @@ enum Panel {
     }
 
     static func move(to index: Int) {
-        for (i, tile) in tiles.enumerated() where !tile.isHidden {
-            tile.setSelected(i == index)
+        withoutAnimation {
+            for (i, tile) in tiles.enumerated() where !tile.isHidden {
+                tile.setSelected(i == index)
+            }
         }
+    }
+
+    /// Layer changes are animated unless something says otherwise, and every change this panel
+    /// makes is meant to be already true by the time it is looked at.
+    private static func withoutAnimation(_ body: () -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        body()
+        CATransaction.commit()
     }
 
     /// Cancel path. Focus goes back where it came from — the panel activates, so leaving it
@@ -152,6 +163,10 @@ enum Panel {
     }
 
     private static func layout(_ windows: [WindowInfo], selected: Int) {
+        withoutAnimation { place(windows, selected: selected) }
+    }
+
+    private static func place(_ windows: [WindowInfo], selected: Int) {
         let count = min(windows.count, tiles.count)
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let available = screen.visibleFrame.width - 120
@@ -211,7 +226,7 @@ enum Panel {
         round = Thumbnails.capture(windows.map(\.id)) { id, image, generation in
             guard generation == round, let index = shown.firstIndex(where: { $0.id == id }),
                   index < tiles.count else { return }
-            tiles[index].setPicture(image)
+            withoutAnimation { tiles[index].setPicture(image) }
         }
     }
 
@@ -246,9 +261,20 @@ enum Panel {
 
         private static let font = NSFont.systemFont(ofSize: 12, weight: .regular)
 
+        /// Core Animation animates every layer change it is not told to leave alone, including
+        /// the very first one — a tile is created at zero size, so its first real frame is a
+        /// growth from nothing, which is the zoom seen on the first ⌥Tab of a session. Pictures
+        /// landing afterwards would cross-fade in for the same reason.
+        private static let still: [String: CAAction] = [
+            "contents": NSNull(), "bounds": NSNull(), "position": NSNull(),
+            "frame": NSNull(), "backgroundColor": NSNull(), "opacity": NSNull(),
+            "hidden": NSNull(), "string": NSNull(),
+        ]
+
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
+            layer?.actions = Self.still
             layer?.cornerRadius = 10
             pictureLayer.contentsGravity = .resizeAspect
             pictureLayer.cornerRadius = 5
@@ -259,6 +285,9 @@ enum Panel {
             labelLayer.foregroundColor = NSColor.labelColor.cgColor
             labelLayer.truncationMode = .end
             labelLayer.alignmentMode = .left
+            for sublayer in [pictureLayer, iconLayer, labelLayer] as [CALayer] {
+                sublayer.actions = Self.still
+            }
             layer?.addSublayer(pictureLayer)
             layer?.addSublayer(iconLayer)
             layer?.addSublayer(labelLayer)

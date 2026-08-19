@@ -110,6 +110,10 @@ enum Thumbnails {
         let round = round ?? -1
         let wanted = ids
         let pixels = size
+        // Retina, and not read from a screen because the capture runs off the main thread. Two
+        // is what every display this will run on uses; being wrong costs sharpness, not
+        // correctness.
+        let scale: CGFloat = 2
         Task {
             var targets = await MainActor.run { wanted.compactMap { id in known[id].map { (id, $0) } } }
             // A window opened since the last refresh is not in the warm list, which is exactly
@@ -127,12 +131,6 @@ enum Thumbnails {
             }
             guard !targets.isEmpty else { return }
 
-            let configuration = SCStreamConfiguration()
-            configuration.width = Int(pixels.width * 2)
-            configuration.height = Int(pixels.height * 2)
-            configuration.showsCursor = false
-            configuration.ignoreShadowsSingleWindow = true
-
             // Six at a time. Concurrency helps up to a point and then hurts: replayd serialises
             // internally, and a burst of a dozen has been measured to take longer in total than
             // the same dozen run in sequence, while blocking every other screenshot on the
@@ -143,10 +141,33 @@ enum Thumbnails {
                 await withTaskGroup(of: (CGWindowID, NSImage)?.self) { group in
                     for (id, window) in batch {
                         group.addTask {
+                            // Asked for at the window's own shape, not at a fixed one. Given a
+                            // frame it does not fit, ScreenCaptureKit letterboxes — and the bars
+                            // it adds are not transparent, so a tall window came back as a strip
+                            // of picture in a slab of black, sitting wherever the padding put it.
+                            // Matching the ratio means there is nothing to pad and nothing to
+                            // align: a narrow window is simply a narrow image, which the tile
+                            // then centres.
+                            //
+                            // Never enlarged past its own size either — a small window blown up
+                            // to fill a tile is a blurred small window.
+                            let frame = window.frame
+                            guard frame.width > 0, frame.height > 0 else { return nil }
+                            let fit = min(pixels.width / frame.width, pixels.height / frame.height, 1)
+                            let logical = CGSize(width: (frame.width * fit).rounded(),
+                                                 height: (frame.height * fit).rounded())
+                            guard logical.width >= 1, logical.height >= 1 else { return nil }
+
+                            let configuration = SCStreamConfiguration()
+                            configuration.width = Int(logical.width * scale)
+                            configuration.height = Int(logical.height * scale)
+                            configuration.showsCursor = false
+                            configuration.ignoreShadowsSingleWindow = true
+
                             let filter = SCContentFilter(desktopIndependentWindow: window)
                             guard let image = try? await SCScreenshotManager.captureImage(
                                 contentFilter: filter, configuration: configuration) else { return nil }
-                            return (id, NSImage(cgImage: image, size: pixels))
+                            return (id, NSImage(cgImage: image, size: logical))
                         }
                     }
                     for await result in group {
