@@ -97,6 +97,9 @@ func dispatch(_ command: SwitchCommand) {
             Panel.note("Could not switch to \(window.appName) — check alt-tab in "
                        + "System Settings → Privacy & Security → Accessibility.")
         }
+        // Photographed after the raise, and by id rather than by asking who has focus — asked
+        // before, the answer is about the window we are leaving.
+        Thumbnails.captureSoon(window.id)
     }
 }
 
@@ -113,6 +116,26 @@ MainActor.assumeIsolated {
     guard Trigger.install({ command in dispatch(command) }) else {
         FileHandle.standardError.write(Data("alt-tab: could not register ⌥Tab — another app owns it\n".utf8))
         exit(1)
+    }
+
+    // A window is photographed while it is the one in use. Cross-application switches are what
+    // NSWorkspace reports; a switch between two windows of the same application is not, and is
+    // covered instead by the capture that follows our own raise below.
+    NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+    ) { note in
+        MainActor.assumeIsolated {
+            guard !state.isOpen,
+                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            else { return }
+            Thumbnails.captureFocused(of: app.processIdentifier)
+        }
+    }
+
+    // One pass a few seconds after login, so the very first ⌥Tab of the day has pictures too
+    // rather than being the one open that pays for all of them.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+        MainActor.assumeIsolated { Thumbnails.captureQuietly(WindowList.snapshot().map(\.id)) }
     }
 
     if arguments.contains("--fake") {

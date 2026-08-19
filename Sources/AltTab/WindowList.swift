@@ -212,6 +212,20 @@ enum WindowList {
         }
     }
 
+    /// The window a process currently considers focused, if it has one.
+    ///
+    /// One Accessibility round trip, on the element we already keep warm for that process, whose
+    /// messaging timeout is 50 ms — so an application that has stopped answering costs that and
+    /// no more.
+    @MainActor
+    static func focusedWindowID(of pid: pid_t) -> CGWindowID? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element(for: pid), kAXFocusedWindowAttribute as CFString,
+                                            &value) == .success else { return nil }
+        guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return windowID(of: unsafeBitCast(value, to: AXUIElement.self))
+    }
+
     private static func windowID(of element: AXUIElement) -> CGWindowID? {
         guard let getWindow else { return nil }
         var id: CGWindowID = 0

@@ -212,13 +212,11 @@ enum Panel {
     /// been rebuilt with a different set of windows.
     private static func requestPictures(for windows: [WindowInfo]) {
         guard Thumbnails.isPermitted else { return }
-        let ids = windows.map(\.id)
-        Thumbnails.capture(ids) { id, image, generation in
+        round = Thumbnails.capture(windows.map(\.id)) { id, image, generation in
             guard generation == round, let index = shown.firstIndex(where: { $0.id == id }),
                   index < tiles.count else { return }
             tiles[index].setPicture(image)
         }
-        round += 1
     }
 
     private static func icon(for pid: pid_t) -> NSImage? {
