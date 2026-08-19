@@ -187,7 +187,7 @@ enum Panel {
             tile.frame = NSRect(x: left + CGFloat(i) * (tileWidth + gap),
                                 y: height - padding - tileHeight,
                                 width: tileWidth, height: tileHeight)
-            tile.setIcon(self.icon(for: windows[i].pid))
+            tile.setIcon(self.icon(for: windows[i].pid), name: windows[i].appName)
             // Yesterday's picture, if there is one, so a window that has not changed is never
             // shown as a blank slot while it is re-captured.
             tile.setPicture(Thumbnails.cached(windows[i].id))
@@ -245,7 +245,12 @@ enum Panel {
     private final class TileView: NSView {
         private let pictureLayer = CALayer()
         private let iconLayer = CALayer()
+        private let nameLayer = CATextLayer()
+        private let plate = CALayer()
         private var hasPicture = false
+        private var name = ""
+
+        private static let font = NSFont.systemFont(ofSize: 11, weight: .medium)
 
         override init(frame: NSRect) {
             super.init(frame: frame)
@@ -254,31 +259,72 @@ enum Panel {
             pictureLayer.contentsGravity = .resizeAspect
             pictureLayer.cornerRadius = 6
             pictureLayer.masksToBounds = true
+            // A plate under the icon and the name, because they sit on somebody else's window
+            // and that window can be any colour — white text on a white document is not a
+            // label, it is a blank.
+            plate.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+            plate.cornerRadius = 6
             iconLayer.contentsGravity = .resizeAspect
+            nameLayer.font = Self.font
+            nameLayer.fontSize = Self.font.pointSize
+            nameLayer.foregroundColor = NSColor.white.cgColor
+            nameLayer.truncationMode = .end
+            nameLayer.alignmentMode = .left
             layer?.addSublayer(pictureLayer)
+            layer?.addSublayer(plate)
             layer?.addSublayer(iconLayer)
+            layer?.addSublayer(nameLayer)
         }
 
         required init?(coder: NSCoder) { fatalError() }
 
         override func layout() {
             super.layout()
-            pictureLayer.frame = bounds.insetBy(dx: 6, dy: 6)
-            let badge = min(bounds.height * 0.27, 30)
-            if hasPicture {
-                // Tucked into the corner of the picture, big enough to name the application at a
-                // glance without covering what the picture is for.
-                iconLayer.frame = CGRect(x: bounds.maxX - badge - 4, y: 4, width: badge, height: badge)
-            } else {
-                // Nothing to sit on yet, so the icon *is* the tile.
+            let scale = window?.backingScaleFactor ?? 2
+            // Text rendered at the window's own scale; left at 1 it is visibly soft on a Retina
+            // display, which is the only place it will ever be seen.
+            nameLayer.contentsScale = scale
+            pictureLayer.contentsScale = scale
+
+            let picture = bounds.insetBy(dx: 6, dy: 6)
+            pictureLayer.frame = picture
+
+            guard hasPicture else {
+                // Nothing to label yet, so the icon *is* the tile and the plate stays away.
+                plate.isHidden = true
+                nameLayer.isHidden = true
                 let side = min(bounds.height, bounds.width) - 16
                 iconLayer.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2,
                                          width: side, height: side)
+                return
             }
+            plate.isHidden = false
+            nameLayer.isHidden = false
+
+            let inset: CGFloat = 5
+            // A floor as well as a ceiling: the tiles shrink when there are many windows, and a
+            // plate that scales all the way down stops being able to hold text that does not.
+            let side = max(14, min(20, picture.height * 0.24))
+            let text = (name as NSString).size(withAttributes: [.font: Self.font])
+            let plateHeight = max(side + 6, text.height + 4)
+            // Never wider than the picture it labels: a long application name should run out of
+            // room, not out of the tile.
+            let plateWidth = min(inset + side + 5 + text.width + 6, picture.width - inset * 2)
+            let plateY = picture.maxY - inset - plateHeight
+
+            plate.frame = CGRect(x: picture.minX + inset, y: plateY,
+                                 width: plateWidth, height: plateHeight)
+            iconLayer.frame = CGRect(x: plate.frame.minX + 4, y: plateY + 3, width: side, height: side)
+            nameLayer.frame = CGRect(x: iconLayer.frame.maxX + 5,
+                                     y: plateY + (plateHeight - text.height) / 2,
+                                     width: max(plate.frame.maxX - 6 - (iconLayer.frame.maxX + 5), 0),
+                                     height: text.height)
         }
 
-        func setIcon(_ image: NSImage?) {
+        func setIcon(_ image: NSImage?, name: String) {
             iconLayer.contents = image
+            self.name = name
+            nameLayer.string = name
             needsLayout = true
         }
 
