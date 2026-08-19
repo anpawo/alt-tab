@@ -1,8 +1,12 @@
 import AppKit
 import SwitchCore
 
-/// The window that appears: one row of window pictures, the selected one lit, and the title of
-/// that window underneath.
+/// The window that appears: one row of tiles, each a line naming the window above a picture of
+/// it, with the selected tile lit.
+///
+/// The label sits above its own picture rather than under the row, which is how AltTab does it
+/// and is the arrangement that survives having more than one window: a single line under the
+/// row can only ever describe the selection, so every other tile is unlabelled.
 ///
 /// The pictures arrive after the panel does. A capture costs 45–50 ms each and the panel has a
 /// budget of a few, so every tile is drawn immediately with the application icon and repainted
@@ -18,16 +22,15 @@ import SwitchCore
 @MainActor
 enum Panel {
 
-    private static let maxTile: CGFloat = 176
-    private static let minTile: CGFloat = 96
+    private static let maxTile: CGFloat = 200
+    private static let minTile: CGFloat = 104
     private static let aspect: CGFloat = 110.0 / 176.0
     private static let gap: CGFloat = 12
     private static let padding: CGFloat = 20
-    private static let titleHeight: CGFloat = 20
+    private static let headerHeight: CGFloat = 22
 
     private static var panel: NSPanel?
     private static var tiles: [TileView] = []
-    private static var titleField: NSTextField?
     private static var noteField: NSTextField?
     private static var icons: [pid_t: NSImage] = [:]
     private static var previousApp: NSRunningApplication?
@@ -66,7 +69,6 @@ enum Panel {
         for (i, tile) in tiles.enumerated() where !tile.isHidden {
             tile.setSelected(i == index)
         }
-        titleField?.stringValue = index < shown.count ? shown[index].title : ""
     }
 
     /// Cancel path. Focus goes back where it came from — the panel activates, so leaving it
@@ -137,13 +139,6 @@ enum Panel {
             return tile
         }
 
-        let title = NSTextField(labelWithString: "")
-        title.font = .systemFont(ofSize: 13)
-        title.alignment = .center
-        title.lineBreakMode = .byTruncatingTail
-        background.addSubview(title)
-        titleField = title
-
         let note = NSTextField(labelWithString: "")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
@@ -172,32 +167,33 @@ enum Panel {
         let tileHeight = (tileWidth * aspect).rounded()
 
         let noteText = noteField?.stringValue ?? ""
-        let noteHeight: CGFloat = noteText.isEmpty ? 0 : 16
+        let noteHeight: CGFloat = noteText.isEmpty ? 0 : 18
         let row = CGFloat(count) * tileWidth + gap * CGFloat(max(count - 1, 0))
-        // A floor on the width, because the panel is as wide as its tiles and one tile is not as
-        // wide as a window title. Without it the line underneath is truncated while most of the
-        // screen sits empty beside it.
-        let width = max(row + padding * 2, min(380, available))
-        let height = padding * 2 + tileHeight + 8 + titleHeight + noteHeight
+        let width = max(row + padding * 2, min(300, available))
+        // Each tile carries its own label now, so the panel is exactly the row plus its margins.
+        let fullTile = headerHeight + 4 + tileHeight
+        let height = padding * 2 + fullTile + noteHeight
         let left = (width - row) / 2
 
         for (i, tile) in tiles.enumerated() {
             guard i < count else { tile.isHidden = true; continue }
             tile.isHidden = false
             tile.frame = NSRect(x: left + CGFloat(i) * (tileWidth + gap),
-                                y: height - padding - tileHeight,
-                                width: tileWidth, height: tileHeight)
-            tile.setIcon(self.icon(for: windows[i].pid), name: windows[i].appName)
+                                y: padding + noteHeight,
+                                width: tileWidth, height: fullTile)
+            // The window's own title, not the application's name: the icon beside it already
+            // says which application it is, and spending the line on both leaves no room for
+            // the half that distinguishes one window from another — "qemu-system-aarch64 —…"
+            // names the application twice and the window not at all. `WindowInfo` already falls
+            // back to the application name for a window that has no title of its own.
+            tile.setIcon(self.icon(for: windows[i].pid), label: windows[i].title)
             // Yesterday's picture, if there is one, so a window that has not changed is never
             // shown as a blank slot while it is re-captured.
             tile.setPicture(Thumbnails.cached(windows[i].id))
             tile.setSelected(i == selected)
         }
 
-        titleField?.frame = NSRect(x: padding, y: padding + noteHeight,
-                                   width: max(width - padding * 2, 10), height: titleHeight)
-        titleField?.stringValue = selected < windows.count ? windows[selected].title : ""
-        noteField?.frame = NSRect(x: padding, y: padding - 4, width: max(width - padding * 2, 10), height: 14)
+        noteField?.frame = NSRect(x: padding, y: padding - 2, width: max(width - padding * 2, 10), height: 15)
 
         guard let panel else { return }
         let frame = screen.visibleFrame
@@ -237,43 +233,35 @@ enum Panel {
         override var canBecomeMain: Bool { false }
     }
 
-    /// One window: its picture, its application icon in the corner, and the highlight behind it.
+    /// One window: a line naming it, and its picture below.
     ///
-    /// Bare layers rather than `NSImageView`s: the row is a fixed number of fixed-size tiles
-    /// whose contents are known before it is shown, so there is nothing for AppKit's layout,
-    /// responder-chain and drag-and-drop machinery to contribute.
+    /// Bare layers rather than `NSImageView`s and `NSTextField`s: the row is a fixed number of
+    /// fixed-size tiles whose contents are known before it is shown, so there is nothing for
+    /// AppKit's layout, responder-chain and drag-and-drop machinery to contribute.
     private final class TileView: NSView {
         private let pictureLayer = CALayer()
         private let iconLayer = CALayer()
-        private let nameLayer = CATextLayer()
-        private let plate = CALayer()
-        private var hasPicture = false
-        private var name = ""
+        private let labelLayer = CATextLayer()
+        private var text = ""
 
-        private static let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        private static let font = NSFont.systemFont(ofSize: 12, weight: .regular)
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
             layer?.cornerRadius = 10
             pictureLayer.contentsGravity = .resizeAspect
-            pictureLayer.cornerRadius = 6
+            pictureLayer.cornerRadius = 5
             pictureLayer.masksToBounds = true
-            // A plate under the icon and the name, because they sit on somebody else's window
-            // and that window can be any colour — white text on a white document is not a
-            // label, it is a blank.
-            plate.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-            plate.cornerRadius = 6
             iconLayer.contentsGravity = .resizeAspect
-            nameLayer.font = Self.font
-            nameLayer.fontSize = Self.font.pointSize
-            nameLayer.foregroundColor = NSColor.white.cgColor
-            nameLayer.truncationMode = .end
-            nameLayer.alignmentMode = .left
+            labelLayer.font = Self.font
+            labelLayer.fontSize = Self.font.pointSize
+            labelLayer.foregroundColor = NSColor.labelColor.cgColor
+            labelLayer.truncationMode = .end
+            labelLayer.alignmentMode = .left
             layer?.addSublayer(pictureLayer)
-            layer?.addSublayer(plate)
             layer?.addSublayer(iconLayer)
-            layer?.addSublayer(nameLayer)
+            layer?.addSublayer(labelLayer)
         }
 
         required init?(coder: NSCoder) { fatalError() }
@@ -283,54 +271,37 @@ enum Panel {
             let scale = window?.backingScaleFactor ?? 2
             // Text rendered at the window's own scale; left at 1 it is visibly soft on a Retina
             // display, which is the only place it will ever be seen.
-            nameLayer.contentsScale = scale
+            labelLayer.contentsScale = scale
             pictureLayer.contentsScale = scale
 
-            let picture = bounds.insetBy(dx: 6, dy: 6)
-            pictureLayer.frame = picture
+            let inset: CGFloat = 6
+            let header = Panel.headerHeight
+            // AppKit measures from the bottom, so the header is the top of the tile and the
+            // picture is everything under it.
+            let iconSide = header - 4
+            iconLayer.frame = CGRect(x: inset, y: bounds.height - header + 2,
+                                     width: iconSide, height: iconSide)
 
-            guard hasPicture else {
-                // Nothing to label yet, so the icon *is* the tile and the plate stays away.
-                plate.isHidden = true
-                nameLayer.isHidden = true
-                let side = min(bounds.height, bounds.width) - 16
-                iconLayer.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2,
-                                         width: side, height: side)
-                return
-            }
-            plate.isHidden = false
-            nameLayer.isHidden = false
+            let textHeight = (text as NSString).size(withAttributes: [.font: Self.font]).height
+            labelLayer.frame = CGRect(x: iconLayer.frame.maxX + 6,
+                                      y: bounds.height - header + (header - textHeight) / 2,
+                                      width: max(bounds.width - inset - (iconLayer.frame.maxX + 6), 0),
+                                      height: textHeight)
 
-            let inset: CGFloat = 5
-            // A floor as well as a ceiling: the tiles shrink when there are many windows, and a
-            // plate that scales all the way down stops being able to hold text that does not.
-            let side = max(14, min(20, picture.height * 0.24))
-            let text = (name as NSString).size(withAttributes: [.font: Self.font])
-            let plateHeight = max(side + 6, text.height + 4)
-            // Never wider than the picture it labels: a long application name should run out of
-            // room, not out of the tile.
-            let plateWidth = min(inset + side + 5 + text.width + 6, picture.width - inset * 2)
-            let plateY = picture.maxY - inset - plateHeight
-
-            plate.frame = CGRect(x: picture.minX + inset, y: plateY,
-                                 width: plateWidth, height: plateHeight)
-            iconLayer.frame = CGRect(x: plate.frame.minX + 4, y: plateY + 3, width: side, height: side)
-            nameLayer.frame = CGRect(x: iconLayer.frame.maxX + 5,
-                                     y: plateY + (plateHeight - text.height) / 2,
-                                     width: max(plate.frame.maxX - 6 - (iconLayer.frame.maxX + 5), 0),
-                                     height: text.height)
+            pictureLayer.frame = CGRect(x: inset, y: inset,
+                                        width: bounds.width - inset * 2,
+                                        height: bounds.height - header - inset)
         }
 
-        func setIcon(_ image: NSImage?, name: String) {
+        func setIcon(_ image: NSImage?, label: String) {
             iconLayer.contents = image
-            self.name = name
-            nameLayer.string = name
+            text = label
+            labelLayer.string = label
             needsLayout = true
         }
 
         func setPicture(_ image: NSImage?) {
             pictureLayer.contents = image
-            hasPicture = image != nil
             needsLayout = true
         }
 
