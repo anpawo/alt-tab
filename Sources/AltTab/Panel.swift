@@ -133,12 +133,16 @@ enum Panel {
         // Keeps the panel out of its own list, and out of anyone else's.
         p.setAccessibilitySubrole(.unknown)
 
-        let background = NSVisualEffectView()
-        background.material = .hudWindow
-        background.blendingMode = .behindWindow
-        background.state = .active
+        // Dark aqua whatever the system is set to. Every colour below resolves through the
+        // appearance, and on a black panel a light-mode `labelColor` is black text on black.
+        p.appearance = NSAppearance(named: .darkAqua)
+
+        // A flat dark pane rather than a blur: at this opacity there is nothing left of what is
+        // behind to be worth blurring, and the blur's own tint is what kept it grey.
+        let background = NSView()
         background.wantsLayer = true
-        background.layer?.cornerRadius = 16
+        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
+        background.layer?.cornerRadius = 22
         background.layer?.masksToBounds = true
         p.contentView = background
 
@@ -275,9 +279,9 @@ enum Panel {
             super.init(frame: frame)
             wantsLayer = true
             layer?.actions = Self.still
-            layer?.cornerRadius = 10
+            layer?.cornerRadius = 14
             pictureLayer.contentsGravity = .resizeAspect
-            pictureLayer.cornerRadius = 5
+            pictureLayer.cornerRadius = 10
             pictureLayer.masksToBounds = true
             iconLayer.contentsGravity = .resizeAspect
             labelLayer.font = Self.font
