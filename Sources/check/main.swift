@@ -21,7 +21,8 @@ private func scenario(_ name: String, _ body: () -> Void) {
 
 private func windows(_ n: Int) -> [WindowInfo] {
     (0..<n).map {
-        WindowInfo(id: CGWindowID($0 + 1), pid: 100, appName: "App\($0)", title: "Window \($0)", element: nil)
+        WindowInfo(id: CGWindowID($0 + 1), pid: 100, appName: "App\($0)", title: "Window \($0)",
+                   element: nil, size: CGSize(width: 800, height: 500))
     }
 }
 

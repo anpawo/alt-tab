@@ -22,12 +22,16 @@ import SwitchCore
 @MainActor
 enum Panel {
 
-    private static let maxTile: CGFloat = 200
-    private static let minTile: CGFloat = 104
-    private static let aspect: CGFloat = 110.0 / 176.0
+    /// Pictures are all the same height and each is as wide as its own window — so a tile is
+    /// shaped like the window it stands for, and the highlight behind the selected one is that
+    /// shape rather than a wide box with a narrow picture adrift in it.
+    private static let pictureHeight: CGFloat = 150
+    private static let minPicture: CGFloat = 112
+    private static let maxPicture: CGFloat = 264
     private static let gap: CGFloat = 12
     private static let padding: CGFloat = 20
-    private static let headerHeight: CGFloat = 22
+    static let headerHeight: CGFloat = 28
+    static let tileInset: CGFloat = 7
 
     private static var panel: NSPanel?
     private static var tiles: [TileView] = []
@@ -141,7 +145,7 @@ enum Panel {
         // behind to be worth blurring, and the blur's own tint is what kept it grey.
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
+        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.90).cgColor
         background.layer?.cornerRadius = 22
         background.layer?.masksToBounds = true
         p.contentView = background
@@ -175,31 +179,43 @@ enum Panel {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let available = screen.visibleFrame.width - 120
 
-        // Tiles shrink rather than the row wrapping or scrolling: a switcher you have to read
-        // twice is slower than one whose pictures are small, and the selection is what you are
-        // looking at anyway.
-        var tileWidth = maxTile
-        if count > 0 {
-            let widest = (available - padding * 2 - gap * CGFloat(count - 1)) / CGFloat(count)
-            tileWidth = max(minTile, min(maxTile, widest))
+        /// Each picture's width from its window's own proportions, clamped so a very tall window
+        /// still has room for a label and a very wide one does not take the whole screen.
+        func widths(pictureHeight: CGFloat) -> [CGFloat] {
+            (0..<count).map { i in
+                let size = windows[i].size
+                let ratio = size.width > 0 && size.height > 0 ? size.width / size.height : 1.6
+                return min(max((pictureHeight * ratio).rounded(), minPicture), maxPicture)
+                    + tileInset * 2
+            }
         }
-        let tileHeight = (tileWidth * aspect).rounded()
+
+        // The row shrinks as a whole when it does not fit, rather than any one tile being
+        // singled out: the pictures stay comparable to each other, which is what makes a row of
+        // them readable at a glance.
+        var height = pictureHeight
+        var tileWidths = widths(pictureHeight: height)
+        var row = tileWidths.reduce(0, +) + gap * CGFloat(max(count - 1, 0))
+        let widest = available - padding * 2
+        if row > widest, row > 0 {
+            height = max(70, (height * widest / row).rounded())
+            tileWidths = widths(pictureHeight: height)
+            row = tileWidths.reduce(0, +) + gap * CGFloat(max(count - 1, 0))
+        }
 
         let noteText = noteField?.stringValue ?? ""
         let noteHeight: CGFloat = noteText.isEmpty ? 0 : 18
-        let row = CGFloat(count) * tileWidth + gap * CGFloat(max(count - 1, 0))
         let width = max(row + padding * 2, min(300, available))
-        // Each tile carries its own label now, so the panel is exactly the row plus its margins.
-        let fullTile = headerHeight + 4 + tileHeight
-        let height = padding * 2 + fullTile + noteHeight
-        let left = (width - row) / 2
+        let fullTile = headerHeight + height + tileInset
+        let panelHeight = padding * 2 + fullTile + noteHeight
+        var x = (width - row) / 2
 
         for (i, tile) in tiles.enumerated() {
             guard i < count else { tile.isHidden = true; continue }
             tile.isHidden = false
-            tile.frame = NSRect(x: left + CGFloat(i) * (tileWidth + gap),
-                                y: padding + noteHeight,
-                                width: tileWidth, height: fullTile)
+            tile.frame = NSRect(x: x, y: padding + noteHeight,
+                                width: tileWidths[i], height: fullTile)
+            x += tileWidths[i] + gap
             // The window's own title, not the application's name: the icon beside it already
             // says which application it is, and spending the line on both leaves no room for
             // the half that distinguishes one window from another — "qemu-system-aarch64 —…"
@@ -212,13 +228,13 @@ enum Panel {
             tile.setSelected(i == selected)
         }
 
-        noteField?.frame = NSRect(x: padding, y: padding - 2, width: max(width - padding * 2, 10), height: 15)
+        noteField?.frame = NSRect(x: padding, y: padding - 2, width: max(width - padding * 2, 10), height: 16)
 
         guard let panel else { return }
         let frame = screen.visibleFrame
         panel.setFrame(NSRect(x: frame.midX - width / 2,
-                              y: frame.midY - height / 2,
-                              width: width, height: height),
+                              y: frame.midY - panelHeight / 2,
+                              width: width, height: panelHeight),
                        display: false)
         panel.alphaValue = 1
     }
@@ -263,7 +279,7 @@ enum Panel {
         private let labelLayer = CATextLayer()
         private var text = ""
 
-        private static let font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        private static let font = NSFont.systemFont(ofSize: 14, weight: .regular)
 
         /// Core Animation animates every layer change it is not told to leave alone, including
         /// the very first one — a tile is created at zero size, so its first real frame is a
@@ -307,11 +323,11 @@ enum Panel {
             labelLayer.contentsScale = scale
             pictureLayer.contentsScale = scale
 
-            let inset: CGFloat = 6
+            let inset = Panel.tileInset
             let header = Panel.headerHeight
             // AppKit measures from the bottom, so the header is the top of the tile and the
             // picture is everything under it.
-            let iconSide = header - 4
+            let iconSide = header - 6
             iconLayer.frame = CGRect(x: inset, y: bounds.height - header + 2,
                                      width: iconSide, height: iconSide)
 

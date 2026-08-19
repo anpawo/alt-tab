@@ -126,7 +126,7 @@ enum WindowList {
 
         // Z-order, front to back, layer 0 only. Everything above layer 0 is menu bar, Dock,
         // Control Center and wallpaper; everything below is Notification Center.
-        var ordered: [(id: CGWindowID, pid: pid_t)] = []
+        var ordered: [(id: CGWindowID, pid: pid_t, size: CGSize)] = []
         if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                  kCGNullWindowID) as? [[String: Any]] {
             for entry in list {
@@ -135,7 +135,12 @@ enum WindowList {
                       let pid = entry[kCGWindowOwnerPID as String] as? pid_t,
                       Filter.isForeign(ownerPID: pid, selfPID: selfPID)
                 else { continue }
-                ordered.append((id, pid))
+                var size = CGSize.zero
+                if let bounds = entry[kCGWindowBounds as String],
+                   let rect = CGRect(dictionaryRepresentation: bounds as! CFDictionary) {
+                    size = rect.size
+                }
+                ordered.append((id, pid, size))
             }
         }
         guard !ordered.isEmpty else { return [] }
@@ -201,14 +206,16 @@ enum WindowList {
             let name = names[entry.pid] ?? "—"
             if let hit = resolved[entry.id] {
                 return WindowInfo(id: entry.id, pid: entry.pid, appName: name,
-                                 title: hit.title.isEmpty ? name : hit.title, element: hit.element)
+                                  title: hit.title.isEmpty ? name : hit.title,
+                                  element: hit.element, size: entry.size)
             }
             // Answered and not in the result: the subrole filter rejected it. Trust that.
             guard !replied.contains(entry.pid) else { return nil }
             // Never answered: keep the row. It is unfiltered and unnamed and can only be
             // raised at application granularity, which is still better than a window that
             // vanishes from the switcher because its app is busy.
-            return WindowInfo(id: entry.id, pid: entry.pid, appName: name, title: name, element: nil)
+            return WindowInfo(id: entry.id, pid: entry.pid, appName: name, title: name,
+                              element: nil, size: entry.size)
         }
     }
 

@@ -20,13 +20,18 @@ public struct WindowInfo: Equatable {
     public let appName: String
     public let title: String
     public let element: AXUIElement?
+    /// The window's own size, so a tile can be shaped like the window it stands for instead of
+    /// putting a narrow picture in a wide box.
+    public let size: CGSize
 
-    public init(id: CGWindowID, pid: pid_t, appName: String, title: String, element: AXUIElement?) {
+    public init(id: CGWindowID, pid: pid_t, appName: String, title: String,
+                element: AXUIElement?, size: CGSize) {
         self.id = id
         self.pid = pid
         self.appName = appName
         self.title = title
         self.element = element
+        self.size = size
     }
 
     public static func == (a: WindowInfo, b: WindowInfo) -> Bool { a.id == b.id }
