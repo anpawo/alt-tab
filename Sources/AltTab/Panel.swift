@@ -32,8 +32,9 @@ enum Panel {
     /// AltTab's own numbers for this style and size on macOS 26: 28 around the pane, 18 on a
     /// tile, a 26pt application icon. Read out of their Appearance.swift rather than guessed.
     private static let padding: CGFloat = 28
-    static let headerHeight: CGFloat = 42
-    static let iconSize: CGFloat = 32
+    static let headerHeight: CGFloat = 36
+    /// AltTab's own `iconSize` for this style and size.
+    static let iconSize: CGFloat = 26
     /// AltTab's `edgeInsetsSize` for this style: the breathing room between a tile's edge
     /// and the picture inside it.
     static let tileInset: CGFloat = 12
@@ -322,7 +323,7 @@ enum Panel {
         private var isHot = false
 
         // A point above AltTab's 14, and `.medium` rather than `.regular` — one step of weight,
-        // which is enough to sit level with a 32pt icon without turning into a heading.
+        // enough to read as deliberate without turning into a heading.
         private static let font = NSFont.systemFont(ofSize: 15, weight: .medium)
 
         /// Core Animation animates every layer change it is not told to leave alone, including
