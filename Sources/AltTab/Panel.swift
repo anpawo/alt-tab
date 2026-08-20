@@ -389,9 +389,9 @@ enum Panel {
         private var isHot = false
         private var pictureSize: CGSize = .zero
 
-        // A point above AltTab's 14, and `.medium` rather than `.regular` — one step of weight,
-        // enough to read as deliberate without turning into a heading.
-        private static let font = NSFont.systemFont(ofSize: 15, weight: .medium)
+        // AltTab's own 14, at semibold: the weight carries the emphasis, so the size does not
+        // have to.
+        private static let font = NSFont.systemFont(ofSize: 14, weight: .semibold)
 
         /// Core Animation animates every layer change it is not told to leave alone, including
         /// the very first one — a tile is created at zero size, so its first real frame is a
@@ -451,9 +451,9 @@ enum Panel {
                                      width: iconSide, height: iconSide)
 
             let textHeight = (text as NSString).size(withAttributes: [.font: Self.font]).height
-            labelLayer.frame = CGRect(x: iconLayer.frame.maxX + 6,
+            labelLayer.frame = CGRect(x: iconLayer.frame.maxX + 4,
                                       y: iconLayer.frame.midY - textHeight / 2,
-                                      width: max(bounds.width - inset - (iconLayer.frame.maxX + 6), 0),
+                                      width: max(bounds.width - inset - (iconLayer.frame.maxX + 4), 0),
                                       height: textHeight)
 
             // Centred in what is left under the header, at the size it was given.
