@@ -141,14 +141,26 @@ enum Panel {
         // appearance, and on a black panel a light-mode `labelColor` is black text on black.
         p.appearance = NSAppearance(named: .darkAqua)
 
-        // A flat dark pane rather than a blur: at this opacity there is nothing left of what is
-        // behind to be worth blurring, and the blur's own tint is what kept it grey.
-        let background = NSView()
+        // Apple's own dark glass. `.behindWindow` is what makes it a blur of the desktop rather
+        // than of nothing — `.withinWindow` samples this window's own contents, which are the
+        // pictures we are drawing on top.
+        let background = NSVisualEffectView()
+        background.material = .hudWindow
+        background.blendingMode = .behindWindow
+        background.state = .active
         background.wantsLayer = true
-        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.80).cgColor
         background.layer?.cornerRadius = 22
         background.layer?.masksToBounds = true
         p.contentView = background
+
+        // The material alone reads grey over a bright desktop, so a black veil deepens it. It
+        // cannot be the 80% of the flat version and still be glass: past roughly half, there is
+        // nothing of the blur left to see. This is the dial between the two.
+        let veil = NSView(frame: background.bounds)
+        veil.autoresizingMask = [.width, .height]
+        veil.wantsLayer = true
+        veil.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        background.addSubview(veil)
 
         // A pool, because allocating views is the cost that showed up in every measurement.
         tiles = (0..<24).map { _ in
