@@ -29,8 +29,11 @@ enum Panel {
     private static let minPicture: CGFloat = 112
     private static let maxPicture: CGFloat = 264
     private static let gap: CGFloat = 12
-    private static let padding: CGFloat = 20
-    static let headerHeight: CGFloat = 28
+    /// AltTab's own numbers for this style and size on macOS 26: 28 around the pane, 18 on a
+    /// tile, a 26pt application icon. Read out of their Appearance.swift rather than guessed.
+    private static let padding: CGFloat = 28
+    static let headerHeight: CGFloat = 36
+    static let iconSize: CGFloat = 26
     static let tileInset: CGFloat = 7
 
     private static var panel: NSPanel?
@@ -152,13 +155,13 @@ enum Panel {
         background.blendingMode = .behindWindow
         background.state = .active
         background.wantsLayer = true
-        background.layer?.cornerRadius = 22
+        background.layer?.cornerRadius = 43
         background.layer?.masksToBounds = true
         // `cornerRadius` alone rounds the view's own drawing and nothing else: the behind-window
         // blur is composited by the WindowServer as a plain rectangle, and its square corners
         // stick out past the rounded pane — bright ones over a bright desktop. `maskImage` is
         // the only thing the material itself honours.
-        background.maskImage = roundedMask(radius: 22)
+        background.maskImage = roundedMask(radius: 43)
         p.contentView = background
 
         // The material alone reads grey over a bright desktop, so a black veil deepens it. It
@@ -314,8 +317,11 @@ enum Panel {
         private let crossLayer = CALayer()
         private var text = ""
         private var subject: WindowInfo?
+        private var isHot = false
 
-        private static let font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        // A point above AltTab's 14: the icon beside it grew, and a title that did not would
+        // have read as having shrunk.
+        private static let font = NSFont.systemFont(ofSize: 15, weight: .regular)
 
         /// Core Animation animates every layer change it is not told to leave alone, including
         /// the very first one — a tile is created at zero size, so its first real frame is a
@@ -331,7 +337,7 @@ enum Panel {
             super.init(frame: frame)
             wantsLayer = true
             layer?.actions = Self.still
-            layer?.cornerRadius = 14
+            layer?.cornerRadius = 18
             pictureLayer.contentsGravity = .resizeAspect
             // Square, deliberately: this is a photograph of a window and windows have corners.
             // Rounding it a second time reads as a mistake next to the rounded tile behind it,
@@ -343,7 +349,7 @@ enum Panel {
             labelLayer.foregroundColor = NSColor.labelColor.cgColor
             labelLayer.truncationMode = .end
             labelLayer.alignmentMode = .left
-            crossLayer.contents = Self.crossImage
+            crossLayer.contents = Self.cross
             crossLayer.isHidden = true
             for sublayer in [pictureLayer, iconLayer, labelLayer, crossLayer] as [CALayer] {
                 sublayer.actions = Self.still
@@ -368,8 +374,8 @@ enum Panel {
             let header = Panel.headerHeight
             // AppKit measures from the bottom, so the header is the top of the tile and the
             // picture is everything under it.
-            let iconSide = header - 6
-            iconLayer.frame = CGRect(x: inset, y: bounds.height - header + 2,
+            let iconSide = Panel.iconSize
+            iconLayer.frame = CGRect(x: inset, y: bounds.height - header + (header - iconSide) / 2,
                                      width: iconSide, height: iconSide)
 
             let textHeight = (text as NSString).size(withAttributes: [.font: Self.font]).height
@@ -420,17 +426,35 @@ enum Panel {
             // `.activeAlways`, because the panel is up for half a second and may not be the key
             // window for all of it.
             addTrackingArea(NSTrackingArea(rect: bounds,
-                                           options: [.mouseEnteredAndExited, .activeAlways],
+                                           options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways],
                                            owner: self))
         }
 
         override func mouseEntered(with event: NSEvent) { showCross(true) }
-        override func mouseExited(with event: NSEvent) { showCross(false) }
+
+        override func mouseExited(with event: NSEvent) {
+            showCross(false)
+            setHot(false)
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            setHot(isOnCross(convert(event.locationInWindow, from: nil)))
+        }
+
+        private func setHot(_ hot: Bool) {
+            guard hot != isHot else { return }
+            isHot = hot
+            Panel.withoutAnimation { crossLayer.contents = hot ? Self.crossHot : Self.cross }
+        }
+
+        /// A few points of slack around the disc, because a 20pt target asked for pixel accuracy
+        /// would be a target you have to aim at.
+        private func isOnCross(_ point: NSPoint) -> Bool {
+            !crossLayer.isHidden && crossLayer.frame.insetBy(dx: -4, dy: -4).contains(point)
+        }
 
         override func mouseDown(with event: NSEvent) {
-            let point = convert(event.locationInWindow, from: nil)
-            guard !crossLayer.isHidden, crossLayer.frame.insetBy(dx: -4, dy: -4).contains(point),
-                  let subject else { return }
+            guard isOnCross(convert(event.locationInWindow, from: nil)), let subject else { return }
             Panel.onCloseRequested?(subject)
         }
 
@@ -438,25 +462,33 @@ enum Panel {
             Panel.withoutAnimation { crossLayer.isHidden = !visible }
         }
 
-        /// A dark disc with a cross in it, drawn once and shared: every tile shows the same one,
-        /// and it is only ever on screen while the pointer is over a tile.
-        private static let crossImage: NSImage = {
+        /// A red disc with a black cross, drawn once and shared: every tile shows the same one,
+        /// and it is only ever on screen while the pointer is over a tile. The darker one is
+        /// what it becomes under the pointer — the same feedback a real close button gives.
+        private static func crossImage(hot: Bool) -> NSImage {
             let side: CGFloat = 20
+            // The red of a window's own close button, and the same red pressed.
+            let red = hot
+                ? NSColor(srgbRed: 0.83, green: 0.28, blue: 0.25, alpha: 1)
+                : NSColor(srgbRed: 1.00, green: 0.37, blue: 0.34, alpha: 1)
             return NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-                NSColor.black.withAlphaComponent(0.75).setFill()
+                red.setFill()
                 NSBezierPath(ovalIn: rect).fill()
                 let path = NSBezierPath()
-                let inset = side * 0.32
+                let inset = side * 0.33
                 path.move(to: NSPoint(x: inset, y: inset))
                 path.line(to: NSPoint(x: side - inset, y: side - inset))
                 path.move(to: NSPoint(x: inset, y: side - inset))
                 path.line(to: NSPoint(x: side - inset, y: inset))
-                path.lineWidth = 1.8
+                path.lineWidth = 1.9
                 path.lineCapStyle = .round
-                NSColor.white.setStroke()
+                NSColor.black.setStroke()
                 path.stroke()
                 return true
             }
-        }()
+        }
+
+        private static let cross = crossImage(hot: false)
+        private static let crossHot = crossImage(hot: true)
     }
 }
