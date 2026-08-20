@@ -145,7 +145,7 @@ enum Panel {
         // behind to be worth blurring, and the blur's own tint is what kept it grey.
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.90).cgColor
+        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.80).cgColor
         background.layer?.cornerRadius = 22
         background.layer?.masksToBounds = true
         p.contentView = background
