@@ -22,22 +22,67 @@ import SwitchCore
 @MainActor
 enum Panel {
 
-    /// Pictures are all the same height and each is as wide as its own window — so a tile is
-    /// shaped like the window it stands for, and the highlight behind the selected one is that
-    /// shape rather than a wide box with a narrow picture adrift in it.
-    private static let pictureHeight: CGFloat = 150
-    private static let minPicture: CGFloat = 112
-    private static let maxPicture: CGFloat = 264
     private static let gap: CGFloat = 12
     /// AltTab's own numbers for this style and size on macOS 26: 28 around the pane, 18 on a
     /// tile, a 26pt application icon. Read out of their Appearance.swift rather than guessed.
     private static let padding: CGFloat = 28
-    static let headerHeight: CGFloat = 36
+    /// The icon row: AltTab's edge inset, icon and intra-cell padding, which is what makes our
+    /// tile the same height as theirs.
+    static var headerHeight: CGFloat { tileInset + iconSize + iconToPicture }
     /// AltTab's own `iconSize` for this style and size.
     static let iconSize: CGFloat = 26
     /// AltTab's `edgeInsetsSize` for this style: the breathing room between a tile's edge
     /// and the picture inside it.
     static let tileInset: CGFloat = 12
+    /// Their `intraCellPadding`, between the icon row and the picture.
+    private static let iconToPicture: CGFloat = 5
+    private static let interCell: CGFloat = 1
+
+    /// How big a picture may be, worked out the way AltTab works it out.
+    ///
+    /// Their sizing is not two numbers, it is a calculation over the screen: how much of it the
+    /// panel may take, how many rows of tiles have to fit in that, and how wide a tile may be as
+    /// a fraction of the row. Copying the two numbers it lands on for this display would be
+    /// right here and wrong on the next one, so this is the calculation.
+    struct Box {
+        let pictureWidthMax: CGFloat
+        let pictureWidthMin: CGFloat
+        let pictureHeightMax: CGFloat
+    }
+
+    static func box(for screen: NSScreen) -> Box {
+        let frame = screen.frame
+        // 600 / the screen's width in millimetres, so a very wide display gives the panel a
+        // smaller share of itself. Anything narrower than about 67cm lands on the 0.9 ceiling.
+        var widthShare: CGFloat = 0.9
+        if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+            let millimetres = CGDisplayScreenSize(number).width
+            if millimetres > 0 { widthShare = min(0.9, max(0.45, 600 / millimetres)) }
+        }
+        let heightShare: CGFloat = 0.8
+        let rows: CGFloat = frame.width >= frame.height ? 4 : 7
+
+        let rowsWidth = (frame.width * widthShare - padding * 2).rounded()
+        let rowsHeight = (frame.height * heightShare - padding * 2).rounded()
+        let rowHeight = ((rowsHeight - interCell) / rows - interCell).rounded()
+
+        // How wide a tile may be, as a fraction of the row: enough that a fullscreen window
+        // fills its tile vertically, and that a narrow one still shows a few words of title.
+        let panelRatio = (frame.width * widthShare) / (frame.height * heightShare)
+        let minShare = panelRatio >= 1 ? 0.7 / (panelRatio * rows) : 1.3 / rows
+        let maxShare = panelRatio >= 1 ? 1.5 / (panelRatio * rows) : 2.1 / rows
+
+        return Box(
+            pictureWidthMax: rowsWidth * min(0.30, maxShare) - interCell * 2 - tileInset * 2,
+            pictureWidthMin: rowsWidth * max(0.09, minShare) - interCell * 2 - tileInset * 2,
+            pictureHeightMax: rowHeight - tileInset * 2 - iconToPicture - iconSize)
+    }
+
+    /// The largest any picture will be drawn, which is also the largest worth capturing.
+    static var captureSize: CGSize {
+        let box = box(for: NSScreen.main ?? NSScreen.screens[0])
+        return CGSize(width: max(box.pictureWidthMax, 1), height: max(box.pictureHeightMax, 1))
+    }
 
     private static var panel: NSPanel?
     private static var tiles: [TileView] = []
@@ -219,34 +264,45 @@ enum Panel {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let available = screen.visibleFrame.width - 120
 
-        /// Each picture's width from its window's own proportions, clamped so a very tall window
-        /// still has room for a label and a very wide one does not take the whole screen.
-        func widths(pictureHeight: CGFloat) -> [CGFloat] {
-            (0..<count).map { i in
-                let size = windows[i].size
-                let ratio = size.width > 0 && size.height > 0 ? size.width / size.height : 1.6
-                return min(max((pictureHeight * ratio).rounded(), minPicture), maxPicture)
-                    + tileInset * 2
+        let box = box(for: screen)
+
+        /// The size a window's picture is drawn at: its own proportions, fitted inside the box,
+        /// and never enlarged past its own size — a small window blown up to fill a tile is a
+        /// blurred small window, so AltTab leaves those at 1:1 and so do we.
+        func picture(_ window: WindowInfo) -> CGSize {
+            let size = window.size
+            guard size.width > 0, size.height > 0 else {
+                return CGSize(width: box.pictureWidthMax, height: box.pictureHeightMax)
             }
+            if size.width <= box.pictureWidthMax, size.height <= box.pictureHeightMax { return size }
+            let fit = min(box.pictureWidthMax / size.width, box.pictureHeightMax / size.height)
+            return CGSize(width: (size.width * fit).rounded(), height: (size.height * fit).rounded())
         }
 
-        // The row shrinks as a whole when it does not fit, rather than any one tile being
-        // singled out: the pictures stay comparable to each other, which is what makes a row of
-        // them readable at a glance.
-        var height = pictureHeight
-        var tileWidths = widths(pictureHeight: height)
-        var row = tileWidths.reduce(0, +) + gap * CGFloat(max(count - 1, 0))
+        let pictures = (0..<count).map { picture(windows[$0]) }
+        // A floor on the tile, not on the picture: a tall window keeps its narrow picture and is
+        // given enough tile around it for a few words of its title to be readable.
+        let tileWidths = pictures.map {
+            max($0.width, box.pictureWidthMin).rounded() + tileInset * 2
+        }
+        var pictureArea = box.pictureHeightMax
+        var widths = tileWidths
+        var row = widths.reduce(0, +) + gap * CGFloat(max(count - 1, 0))
+        // One row where AltTab would wrap to four, so a long list has to shrink to fit. The
+        // whole row shrinks together: pictures stay comparable to each other, which is what
+        // makes a row of them readable at a glance.
         let widest = available - padding * 2
         if row > widest, row > 0 {
-            height = max(70, (height * widest / row).rounded())
-            tileWidths = widths(pictureHeight: height)
-            row = tileWidths.reduce(0, +) + gap * CGFloat(max(count - 1, 0))
+            let scale = widest / row
+            widths = widths.map { ($0 * scale).rounded() }
+            pictureArea = (pictureArea * scale).rounded()
+            row = widths.reduce(0, +) + gap * CGFloat(max(count - 1, 0))
         }
 
         let noteText = noteField?.stringValue ?? ""
         let noteHeight: CGFloat = noteText.isEmpty ? 0 : 18
         let width = max(row + padding * 2, min(300, available))
-        let fullTile = headerHeight + height + tileInset
+        let fullTile = headerHeight + pictureArea + tileInset
         let panelHeight = padding * 2 + fullTile + noteHeight
         var x = (width - row) / 2
 
@@ -254,14 +310,20 @@ enum Panel {
             guard i < count else { tile.isHidden = true; continue }
             tile.isHidden = false
             tile.frame = NSRect(x: x, y: padding + noteHeight,
-                                width: tileWidths[i], height: fullTile)
-            x += tileWidths[i] + gap
+                                width: widths[i], height: fullTile)
+            x += widths[i] + gap
             // The window's own title, not the application's name: the icon beside it already
             // says which application it is, and spending the line on both leaves no room for
             // the half that distinguishes one window from another — "qemu-system-aarch64 —…"
             // names the application twice and the window not at all. `WindowInfo` already falls
             // back to the application name for a window that has no title of its own.
             tile.setIcon(self.icon(for: windows[i].pid), label: windows[i].title, subject: windows[i])
+            // The picture is drawn at its own size inside the tile rather than stretched to it,
+            // so a window narrower or shorter than the box keeps its proportions and its scale.
+            let fit = min(1, min(widths[i] - tileInset * 2, pictures[i].width) / max(pictures[i].width, 1),
+                          pictureArea / max(pictures[i].height, 1))
+            tile.setPictureSize(CGSize(width: (pictures[i].width * fit).rounded(),
+                                       height: (pictures[i].height * fit).rounded()))
             // Yesterday's picture, if there is one, so a window that has not changed is never
             // shown as a blank slot while it is re-captured.
             tile.setPicture(Thumbnails.cached(windows[i].id))
@@ -321,6 +383,7 @@ enum Panel {
         private var text = ""
         private var subject: WindowInfo?
         private var isHot = false
+        private var pictureSize: CGSize = .zero
 
         // A point above AltTab's 14, and `.medium` rather than `.regular` — one step of weight,
         // enough to read as deliberate without turning into a heading.
@@ -387,9 +450,14 @@ enum Panel {
                                       width: max(bounds.width - inset - (iconLayer.frame.maxX + 6), 0),
                                       height: textHeight)
 
-            pictureLayer.frame = CGRect(x: inset, y: inset,
-                                        width: bounds.width - inset * 2,
-                                        height: bounds.height - header - inset)
+            // Centred in what is left under the header, at the size it was given.
+            let area = CGRect(x: inset, y: inset,
+                              width: bounds.width - inset * 2,
+                              height: bounds.height - header - inset)
+            let drawn = pictureSize == .zero ? area.size : pictureSize
+            pictureLayer.frame = CGRect(x: (area.midX - drawn.width / 2).rounded(),
+                                        y: (area.midY - drawn.height / 2).rounded(),
+                                        width: drawn.width, height: drawn.height)
 
             // Top-left of the picture, where a window's own close button is.
             let cross: CGFloat = 20
@@ -403,6 +471,11 @@ enum Panel {
             text = label
             labelLayer.string = label
             self.subject = subject
+            needsLayout = true
+        }
+
+        func setPictureSize(_ size: CGSize) {
+            pictureSize = size
             needsLayout = true
         }
 

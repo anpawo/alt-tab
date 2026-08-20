@@ -13,11 +13,12 @@ import ScreenCaptureKit
 @MainActor
 enum Thumbnails {
 
-    /// The largest a tile can be, so nothing is ever asked to enlarge. Asking the API for this
-    /// size rather than shrinking a full-resolution capture afterwards is the difference between
-    /// about 3 MB and 37 MB per window — and the capture costs the same either way, since the
-    /// price is the round trip and not the pixels.
-    static let size = CGSize(width: 264, height: 150)
+    /// The largest a picture will ever be drawn, so nothing is captured bigger than it is shown
+    /// and nothing is ever enlarged. Asking the API for this size rather than shrinking a
+    /// full-resolution capture afterwards is the difference between a few MB and 37 MB per
+    /// window — and the capture costs the same either way, since the price is the round trip and
+    /// not the pixels.
+    static var size: CGSize { Panel.captureSize }
 
     private static var cache: [CGWindowID: NSImage] = [:]
     private static var known: [CGWindowID: SCWindow] = [:]
