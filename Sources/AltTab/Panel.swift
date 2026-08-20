@@ -29,8 +29,9 @@ enum Panel {
     /// The icon row: AltTab's edge inset, icon and intra-cell padding, which is what makes our
     /// tile the same height as theirs.
     static var headerHeight: CGFloat { tileInset + iconSize + iconToPicture }
-    /// AltTab's own `iconSize` for this style and size.
-    static let iconSize: CGFloat = 26
+    /// AltTab's own value for this style and size is 26; this is deliberately larger. The
+    /// picture loses the difference, since the row height is fixed and the icon sits above it.
+    static let iconSize: CGFloat = 32
     /// AltTab's `edgeInsetsSize` for this style: the breathing room between a tile's edge
     /// and the picture inside it.
     static let tileInset: CGFloat = 12
@@ -301,7 +302,10 @@ enum Panel {
 
         let noteText = noteField?.stringValue ?? ""
         let noteHeight: CGFloat = noteText.isEmpty ? 0 : 18
-        let width = max(row + padding * 2, min(300, available))
+        // No floor on the width. There used to be one, from when a tile could be as narrow as
+        // its icon; a tile has its own minimum now, and the floor only served to pad the sides
+        // of a short row — 41 points against the 28 above and below it.
+        let width = row + padding * 2
         let fullTile = headerHeight + pictureArea + tileInset
         let panelHeight = padding * 2 + fullTile + noteHeight
         var x = (width - row) / 2
@@ -441,12 +445,14 @@ enum Panel {
             // AppKit measures from the bottom, so the header is the top of the tile and the
             // picture is everything under it.
             let iconSide = Panel.iconSize
-            iconLayer.frame = CGRect(x: inset, y: bounds.height - header + (header - iconSide) / 2,
+            // At the inset, not centred in the header: AltTab places its icon at
+            // (edgeInsets, edgeInsets), so the space above it is the space beside it.
+            iconLayer.frame = CGRect(x: inset, y: bounds.height - inset - iconSide,
                                      width: iconSide, height: iconSide)
 
             let textHeight = (text as NSString).size(withAttributes: [.font: Self.font]).height
             labelLayer.frame = CGRect(x: iconLayer.frame.maxX + 6,
-                                      y: bounds.height - header + (header - textHeight) / 2,
+                                      y: iconLayer.frame.midY - textHeight / 2,
                                       width: max(bounds.width - inset - (iconLayer.frame.maxX + 6), 0),
                                       height: textHeight)
 
