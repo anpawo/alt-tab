@@ -32,9 +32,11 @@ enum Panel {
     /// AltTab's own numbers for this style and size on macOS 26: 28 around the pane, 18 on a
     /// tile, a 26pt application icon. Read out of their Appearance.swift rather than guessed.
     private static let padding: CGFloat = 28
-    static let headerHeight: CGFloat = 36
-    static let iconSize: CGFloat = 26
-    static let tileInset: CGFloat = 7
+    static let headerHeight: CGFloat = 42
+    static let iconSize: CGFloat = 32
+    /// AltTab's `edgeInsetsSize` for this style: the breathing room between a tile's edge
+    /// and the picture inside it.
+    static let tileInset: CGFloat = 12
 
     private static var panel: NSPanel?
     private static var tiles: [TileView] = []
@@ -319,9 +321,9 @@ enum Panel {
         private var subject: WindowInfo?
         private var isHot = false
 
-        // A point above AltTab's 14: the icon beside it grew, and a title that did not would
-        // have read as having shrunk.
-        private static let font = NSFont.systemFont(ofSize: 15, weight: .regular)
+        // A point above AltTab's 14, and `.medium` rather than `.regular` — one step of weight,
+        // which is enough to sit level with a 32pt icon without turning into a heading.
+        private static let font = NSFont.systemFont(ofSize: 15, weight: .medium)
 
         /// Core Animation animates every layer change it is not told to leave alone, including
         /// the very first one — a tile is created at zero size, so its first real frame is a
