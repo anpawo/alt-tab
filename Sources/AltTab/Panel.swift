@@ -151,6 +151,11 @@ enum Panel {
         background.wantsLayer = true
         background.layer?.cornerRadius = 22
         background.layer?.masksToBounds = true
+        // `cornerRadius` alone rounds the view's own drawing and nothing else: the behind-window
+        // blur is composited by the WindowServer as a plain rectangle, and its square corners
+        // stick out past the rounded pane — bright ones over a bright desktop. `maskImage` is
+        // the only thing the material itself honours.
+        background.maskImage = roundedMask(radius: 22)
         p.contentView = background
 
         // The material alone reads grey over a bright desktop, so a black veil deepens it. It
@@ -180,6 +185,20 @@ enum Panel {
 
         panel = p
         return p
+    }
+
+    /// A rounded rectangle that stretches: the corners are kept and only the middle is
+    /// repeated, so one small image masks the pane at any size it takes.
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let side = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     private static func layout(_ windows: [WindowInfo], selected: Int) {
@@ -309,7 +328,9 @@ enum Panel {
             layer?.actions = Self.still
             layer?.cornerRadius = 14
             pictureLayer.contentsGravity = .resizeAspect
-            pictureLayer.cornerRadius = 10
+            // Square, deliberately: this is a photograph of a window and windows have corners.
+            // Rounding it a second time reads as a mistake next to the rounded tile behind it,
+            // which is the shape that is meant to be soft.
             pictureLayer.masksToBounds = true
             iconLayer.contentsGravity = .resizeAspect
             labelLayer.font = Self.font
