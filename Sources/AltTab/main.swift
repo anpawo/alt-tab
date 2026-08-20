@@ -102,6 +102,11 @@ func dispatch(_ command: SwitchCommand) {
     }
 
     guard let effect = state.handle(command, windows: windows) else { return }
+    apply(effect)
+}
+
+@MainActor
+func apply(_ effect: Effect) {
     switch effect {
     case let .show(list, index):
         Panel.show(list, selected: index)
@@ -114,7 +119,7 @@ func dispatch(_ command: SwitchCommand) {
     case let .raise(window):
         Trigger.stopWatchingForRelease()
         Panel.dismiss()
-        if !Raise.perform(window) {
+        if !WindowAction.perform(window) {
             // Hangs off the failed *action*, not off the permission check: the check can
             // report trusted after a revocation, and the failure to design against is the
             // panel that opens, looks perfect, and then does nothing when ⌥ comes up.
@@ -140,6 +145,22 @@ MainActor.assumeIsolated {
     guard Trigger.install({ command in dispatch(command) }) else {
         FileHandle.standardError.write(Data("alt-tab: could not register ⌥Tab — another app owns it\n".utf8))
         exit(1)
+    }
+
+    // The cross on a tile. Closing is asked for here and confirmed by re-reading the list a
+    // moment later: a window with unsaved changes puts up a sheet and does not go anywhere, and
+    // a list that had already dropped it would be showing something untrue.
+    Panel.onCloseRequested = { window in
+        guard WindowAction.close(window) else {
+            Panel.note("Could not close \(window.appName).")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            MainActor.assumeIsolated {
+                windows = WindowList.snapshot()
+                if let effect = state.refresh(windows) { apply(effect) }
+            }
+        }
     }
 
     // A window is photographed while it is the one in use. Cross-application switches are what

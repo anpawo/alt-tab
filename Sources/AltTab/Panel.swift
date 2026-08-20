@@ -42,6 +42,9 @@ enum Panel {
     /// Which round of captures the tiles currently belong to. A picture that arrives after the
     /// panel has moved on is for a window that is no longer in that slot.
     private static var round = 0
+    /// Asked when the cross on a tile is clicked. The panel does not close anything itself: it
+    /// says which window, and stays out of what that means.
+    static var onCloseRequested: ((WindowInfo) -> Void)?
 
     /// Pays for the window, the view tree and the icon cache before anything is asked of them.
     static func warm() {
@@ -79,7 +82,7 @@ enum Panel {
 
     /// Layer changes are animated unless something says otherwise, and every change this panel
     /// makes is meant to be already true by the time it is looked at.
-    private static func withoutAnimation(_ body: () -> Void) {
+    fileprivate static func withoutAnimation(_ body: () -> Void) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         body()
@@ -252,7 +255,7 @@ enum Panel {
             // the half that distinguishes one window from another — "qemu-system-aarch64 —…"
             // names the application twice and the window not at all. `WindowInfo` already falls
             // back to the application name for a window that has no title of its own.
-            tile.setIcon(self.icon(for: windows[i].pid), label: windows[i].title)
+            tile.setIcon(self.icon(for: windows[i].pid), label: windows[i].title, subject: windows[i])
             // Yesterday's picture, if there is one, so a window that has not changed is never
             // shown as a blank slot while it is re-captured.
             tile.setPicture(Thumbnails.cached(windows[i].id))
@@ -308,7 +311,9 @@ enum Panel {
         private let pictureLayer = CALayer()
         private let iconLayer = CALayer()
         private let labelLayer = CATextLayer()
+        private let crossLayer = CALayer()
         private var text = ""
+        private var subject: WindowInfo?
 
         private static let font = NSFont.systemFont(ofSize: 14, weight: .regular)
 
@@ -338,12 +343,15 @@ enum Panel {
             labelLayer.foregroundColor = NSColor.labelColor.cgColor
             labelLayer.truncationMode = .end
             labelLayer.alignmentMode = .left
-            for sublayer in [pictureLayer, iconLayer, labelLayer] as [CALayer] {
+            crossLayer.contents = Self.crossImage
+            crossLayer.isHidden = true
+            for sublayer in [pictureLayer, iconLayer, labelLayer, crossLayer] as [CALayer] {
                 sublayer.actions = Self.still
             }
             layer?.addSublayer(pictureLayer)
             layer?.addSublayer(iconLayer)
             layer?.addSublayer(labelLayer)
+            layer?.addSublayer(crossLayer)
         }
 
         required init?(coder: NSCoder) { fatalError() }
@@ -373,12 +381,19 @@ enum Panel {
             pictureLayer.frame = CGRect(x: inset, y: inset,
                                         width: bounds.width - inset * 2,
                                         height: bounds.height - header - inset)
+
+            // Top-left of the picture, where a window's own close button is.
+            let cross: CGFloat = 20
+            crossLayer.frame = CGRect(x: pictureLayer.frame.minX + 6,
+                                      y: pictureLayer.frame.maxY - cross - 6,
+                                      width: cross, height: cross)
         }
 
-        func setIcon(_ image: NSImage?, label: String) {
+        func setIcon(_ image: NSImage?, label: String, subject: WindowInfo) {
             iconLayer.contents = image
             text = label
             labelLayer.string = label
+            self.subject = subject
             needsLayout = true
         }
 
@@ -388,9 +403,60 @@ enum Panel {
         }
 
         func setSelected(_ selected: Bool) {
+            // The system accent colour, which is the blue AltTab uses — it reads
+            // `controlAccentColor`, so both follow whatever the user set in System Settings.
             layer?.backgroundColor = selected
-                ? NSColor.white.withAlphaComponent(0.22).cgColor
+                ? NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor
                 : NSColor.clear.cgColor
+            layer?.borderColor = NSColor.controlAccentColor.cgColor
+            layer?.borderWidth = selected ? 3 : 0
         }
+
+        // MARK: - The cross
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            // `.activeAlways`, because the panel is up for half a second and may not be the key
+            // window for all of it.
+            addTrackingArea(NSTrackingArea(rect: bounds,
+                                           options: [.mouseEnteredAndExited, .activeAlways],
+                                           owner: self))
+        }
+
+        override func mouseEntered(with event: NSEvent) { showCross(true) }
+        override func mouseExited(with event: NSEvent) { showCross(false) }
+
+        override func mouseDown(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            guard !crossLayer.isHidden, crossLayer.frame.insetBy(dx: -4, dy: -4).contains(point),
+                  let subject else { return }
+            Panel.onCloseRequested?(subject)
+        }
+
+        private func showCross(_ visible: Bool) {
+            Panel.withoutAnimation { crossLayer.isHidden = !visible }
+        }
+
+        /// A dark disc with a cross in it, drawn once and shared: every tile shows the same one,
+        /// and it is only ever on screen while the pointer is over a tile.
+        private static let crossImage: NSImage = {
+            let side: CGFloat = 20
+            return NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+                NSColor.black.withAlphaComponent(0.75).setFill()
+                NSBezierPath(ovalIn: rect).fill()
+                let path = NSBezierPath()
+                let inset = side * 0.32
+                path.move(to: NSPoint(x: inset, y: inset))
+                path.line(to: NSPoint(x: side - inset, y: side - inset))
+                path.move(to: NSPoint(x: inset, y: side - inset))
+                path.line(to: NSPoint(x: side - inset, y: inset))
+                path.lineWidth = 1.8
+                path.lineCapStyle = .round
+                NSColor.white.setStroke()
+                path.stroke()
+                return true
+            }
+        }()
     }
 }

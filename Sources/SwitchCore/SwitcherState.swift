@@ -27,10 +27,33 @@ public struct SwitcherState {
     /// moves under it, and then the *default* pick silently re-derives while the *user's*
     /// pick does not — which is the shape of the bug, not a crash.
     private var selected: CGWindowID?
+    /// Where the selection sat before the list changed, so a closed window hands its place to
+    /// the one that takes it rather than sending the selection back to the start.
+    private var previousIndex = 0
 
     public init() {}
 
     public var isOpen: Bool { selected != nil }
+
+    /// Re-states the panel over a list that has changed underneath it — a window closed, or
+    /// simply gone.
+    ///
+    /// The selection is kept by identity when the window is still there and falls back to the
+    /// same position otherwise, which is what makes closing several in a row feel like a list
+    /// and not like a reset.
+    public mutating func refresh(_ windows: [WindowInfo]) -> Effect? {
+        guard let current = selected else { return nil }
+        guard !windows.isEmpty else {
+            selected = nil
+            return .hide
+        }
+        if let index = windows.firstIndex(where: { $0.id == current }) {
+            return .show(windows, index)
+        }
+        let index = min(previousIndex, windows.count - 1)
+        selected = windows[index].id
+        return .show(windows, index)
+    }
 
     public mutating func handle(_ command: SwitchCommand, windows: [WindowInfo]) -> Effect? {
         switch command {
@@ -41,11 +64,13 @@ public struct SwitcherState {
                 // were on before this one, and a second brings you back.
                 let start = min(1, windows.count - 1)
                 selected = windows[start].id
+                previousIndex = start
                 return .show(windows, start)
             }
             let i = windows.firstIndex(where: { $0.id == current }) ?? 0
             let next = (i + 1) % windows.count
             selected = windows[next].id
+            previousIndex = next
             return .move(next)
 
         case .commit:

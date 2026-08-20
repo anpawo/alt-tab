@@ -173,5 +173,43 @@ scenario("there is one binding, and its default is ⌥Tab") {
            "a default is unusable")
 }
 
+scenario("a list that changed keeps the selection it still has") {
+    let list = windows(4)
+    var state = SwitcherState()
+    _ = state.handle(.next, windows: list)          // index 1
+    _ = state.handle(.next, windows: list)          // index 2
+    // The first window closes; the selection is a window, not a place, so it must not move.
+    let shorter = Array(list.dropFirst())
+    guard case let .show(_, index)? = state.refresh(shorter) else {
+        return expect(false, "refresh produced nothing")
+    }
+    expect(shorter[index].id == list[2].id, "the selection moved to another window")
+}
+
+scenario("closing the selected window hands its place to the next") {
+    let list = windows(4)
+    var state = SwitcherState()
+    _ = state.handle(.next, windows: list)          // index 1
+    let shorter = list.filter { $0.id != list[1].id }
+    guard case let .show(_, index)? = state.refresh(shorter) else {
+        return expect(false, "refresh produced nothing")
+    }
+    // Its place, not the start — closing several in a row should walk the list.
+    expect(index == 1, "the selection went back to the beginning")
+}
+
+scenario("closing the last window closes the panel") {
+    let list = windows(1)
+    var state = SwitcherState()
+    _ = state.handle(.next, windows: list)
+    expect(state.refresh([]) == .hide, "an empty list left the panel up")
+    expect(state.isOpen == false, "stayed open with nothing to show")
+}
+
+scenario("a list changing while nothing is open does nothing") {
+    var state = SwitcherState()
+    expect(state.refresh(windows(3)) == nil, "refresh acted while closed")
+}
+
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

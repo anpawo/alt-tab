@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import SwitchCore
 
-/// Handing focus to the chosen window.
+/// What we do to a window: bring it forward, or close it.
 ///
 /// `AXRaise` is the gesture macOS honours by following the window to wherever it lives —
 /// activating the application alone only makes it frontmost, and if its window is on another
@@ -13,7 +13,23 @@ import SwitchCore
 /// the intent is legible, not at launch where a background agent asking for control of the
 /// computer reads as an intrusion.
 @MainActor
-enum Raise {
+enum WindowAction {
+
+    /// Presses the window's own close button, through Accessibility.
+    ///
+    /// Nothing is removed from the list here. A window closes when the system says it has, not
+    /// when we asked — a document with unsaved changes puts up a sheet and stays exactly where
+    /// it was, and a list that had already dropped it would be lying.
+    @discardableResult
+    static func close(_ window: WindowInfo) -> Bool {
+        guard trusted(), let element = window.element else { return false }
+        var button: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXCloseButtonAttribute as CFString,
+                                            &button) == .success,
+              CFGetTypeID(button) == AXUIElementGetTypeID() else { return false }
+        return AXUIElementPerformAction(unsafeBitCast(button, to: AXUIElement.self),
+                                        kAXPressAction as CFString) == .success
+    }
 
     static func perform(_ window: WindowInfo) -> Bool {
         guard trusted() else { return false }
