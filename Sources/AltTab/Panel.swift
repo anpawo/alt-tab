@@ -97,30 +97,10 @@ enum Panel {
     /// Asked when the cross on a tile is clicked. The panel does not close anything itself: it
     /// says which window, and stays out of what that means.
     static var onCloseRequested: ((WindowInfo) -> Void)?
-    /// Asked when a tile itself is clicked. Same bargain: the panel names the window and leaves
-    /// the switching to whoever owns the state machine.
+    /// Asked when a tile itself is clicked — which is something you do with ⌥ still held, since
+    /// releasing it is what ends the session. Same bargain as the cross: the panel names the
+    /// window and leaves the switching to whoever owns the state machine.
     static var onPicked: ((WindowInfo) -> Void)?
-    /// Asked the first time the pointer moves over a tile. The mouse and the held modifier are
-    /// two ways to run the same session and they cannot both decide when it ends: to reach a
-    /// tile with the pointer you have to let go of ⌥, and committing on that release would take
-    /// the panel away before the hand arrives.
-    static var onPointerTakeover: (() -> Void)?
-    /// Asked when the panel loses key focus while it is still up — which can only happen once
-    /// the pointer has taken over, since nothing else outlives the modifier. A switcher left
-    /// open behind another application is the one failure it cannot have.
-    static var onDismissRequested: (() -> Void)?
-
-    private static var pointerTookOver = false
-    /// Where the pointer was when the panel appeared, so that taking the session over asks for
-    /// a deliberate movement rather than for the panel to have opened under the hand. The panel
-    /// opens in the middle of the screen, which is where a pointer usually already is.
-    private static var pointerAtReveal: NSPoint = .zero
-    /// How far the pointer has to travel before it is understood to be reaching for a tile.
-    private static let takeoverDistance: CGFloat = 12
-    /// Once the pointer owns the session nothing else will close the panel, so this bounds it:
-    /// a switcher that has been sitting open and untouched was not going to be used.
-    private static let pointerIdleLimit = 5.0
-    private static var pointerIdle: Timer?
     /// The panel is shown late on purpose, so a ⌥Tab and release inside `revealDelay` switches
     /// without anything appearing at all. AltTab's own default for this is 100 ms.
     private static let revealDelay = 0.1
@@ -138,7 +118,6 @@ enum Panel {
     static func show(_ windows: [WindowInfo], selected: Int) {
         let panel = built()
         shown = windows
-        pointerTookOver = false
         layout(windows, selected: selected)
         requestPictures(for: windows)
 
@@ -151,7 +130,6 @@ enum Panel {
         reveal?.invalidate()
         reveal = Timer.scheduledTimer(withTimeInterval: revealDelay, repeats: false) { _ in
             MainActor.assumeIsolated {
-                pointerAtReveal = NSEvent.mouseLocation
                 // Order in before activating. Activating first would pull us to whichever Space
                 // macOS last associated this app with; putting the window up first means the
                 // Space we join is the one being looked at.
@@ -200,8 +178,6 @@ enum Panel {
         // has already happened.
         reveal?.invalidate()
         reveal = nil
-        pointerIdle?.invalidate()
-        pointerIdle = nil
         // Alpha first: ordering out goes through the WindowServer and can lag, and a panel that
         // is still painted after the switch reads as the switch not having happened.
         panel?.alphaValue = 0
@@ -286,42 +262,8 @@ enum Panel {
         background.addSubview(note)
         noteField = note
 
-        // Clicking straight through to another application leaves the panel floating over it,
-        // because it is a floating panel that does not hide on deactivation. Only reachable
-        // after the pointer has taken over; before that the modifier ends the session first.
-        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
-                                               object: p, queue: .main) { _ in
-            MainActor.assumeIsolated {
-                guard p.isVisible else { return }
-                onDismissRequested?()
-            }
-        }
-
         panel = p
         return p
-    }
-
-    fileprivate static func pointerMoved() {
-        guard pointerTookOver else {
-            let now = NSEvent.mouseLocation
-            let travelled = hypot(now.x - pointerAtReveal.x, now.y - pointerAtReveal.y)
-            guard travelled >= takeoverDistance else { return }
-            pointerTookOver = true
-            onPointerTakeover?()
-            keepAlive()
-            return
-        }
-        keepAlive()
-    }
-
-    /// Restarts the idle countdown. Called on every pointer movement, so the limit is time
-    /// since the hand stopped, not time since it started.
-    private static func keepAlive() {
-        pointerIdle?.invalidate()
-        pointerIdle = Timer.scheduledTimer(withTimeInterval: pointerIdleLimit, repeats: false) { _ in
-            MainActor.assumeIsolated { onDismissRequested?() }
-        }
-        RunLoop.main.add(pointerIdle!, forMode: .common)
     }
 
     /// A rounded rectangle that stretches: the corners are kept and only the middle is
@@ -625,8 +567,10 @@ enum Panel {
 
         /// The system accent colour, which is the blue AltTab uses — it reads
         /// `controlAccentColor`, so both follow whatever the user set in System Settings.
+        ///
         /// The pointer lights the tile it is over the same way, only fainter — fill and border
-        /// both — so the selection is still the stronger of the two when they differ.
+        /// both. It says what a click would land on and nothing more: the selection is what a
+        /// release commits to, and the pointer never moves it.
         private func paint() {
             let accent = NSColor.controlAccentColor
             let tint: CGFloat = isSelected ? 0.2 : (isHovered ? 0.11 : 0)
@@ -665,7 +609,6 @@ enum Panel {
         override func mouseMoved(with event: NSEvent) {
             setHot(isOnCross(convert(event.locationInWindow, from: nil)))
             setHovered(true)
-            Panel.pointerMoved()
         }
 
         private func setHot(_ hot: Bool) {

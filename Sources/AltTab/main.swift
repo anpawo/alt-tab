@@ -167,11 +167,6 @@ MainActor.assumeIsolated {
     // there is no ⌥ to release after it — so it names its window and the state machine raises it.
     Panel.onPicked = { window in dispatch(.pick(window.id)) }
 
-    // Reaching a tile with the pointer means letting go of ⌥, so the pointer arriving is what
-    // takes the decision away from the release.
-    Panel.onPointerTakeover = { Trigger.abandonHold() }
-    Panel.onDismissRequested = { dispatch(.cancel) }
-
     // A window is photographed while it is the one in use. Cross-application switches are what
     // NSWorkspace reports; a switch between two windows of the same application is not, and is
     // covered instead by the capture that follows our own raise below.
