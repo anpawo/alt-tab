@@ -7,7 +7,14 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.mr.alttab</string>
 	<key>CFBundleName</key>
-	<string>alt-tab</string>
+	<string>mr. alt-tab</string>
+	<!-- The name macOS shows: in the Finder, in the Accessibility list, and in Login Items &
+	     Extensions, where an app with no Developer ID is otherwise a bare name above "Item from
+	     unidentified developer". That second line is Apple's and cannot be bought back without a
+	     Developer ID, so the first one carries the author instead — the same pseudonym on every
+	     app of his, which is what makes the list sortable by whose it is. -->
+	<key>CFBundleDisplayName</key>
+	<string>mr. alt-tab</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
