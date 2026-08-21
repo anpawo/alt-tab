@@ -66,8 +66,10 @@ launchctl bootstrap "gui/$UID" "$PLIST"
 launchctl kickstart -k "gui/$UID/$LABEL"
 
 echo
-echo "Installed. ⌥Tab switches windows; ⇧⌥Tab goes back; ⌥Esc cancels."
-echo "The ⇥ key in the menu bar means it is running — click it to rebind those."
+echo "Installed. Hold ⌥ and press Tab to switch windows; Escape cancels."
+echo "Reach for a tile with the mouse and the panel waits: click one to switch,"
+echo "or click the red cross on its picture to close that window."
+echo "The ⇥ key in the menu bar means it is running — click it to rebind the chord."
 echo
 echo "The first time you commit a switch, macOS will ask for Accessibility."
 echo "Until it is granted the panel lists applications without window names,"

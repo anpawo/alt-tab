@@ -97,6 +97,34 @@ enum Panel {
     /// Asked when the cross on a tile is clicked. The panel does not close anything itself: it
     /// says which window, and stays out of what that means.
     static var onCloseRequested: ((WindowInfo) -> Void)?
+    /// Asked when a tile itself is clicked. Same bargain: the panel names the window and leaves
+    /// the switching to whoever owns the state machine.
+    static var onPicked: ((WindowInfo) -> Void)?
+    /// Asked the first time the pointer moves over a tile. The mouse and the held modifier are
+    /// two ways to run the same session and they cannot both decide when it ends: to reach a
+    /// tile with the pointer you have to let go of ⌥, and committing on that release would take
+    /// the panel away before the hand arrives.
+    static var onPointerTakeover: (() -> Void)?
+    /// Asked when the panel loses key focus while it is still up — which can only happen once
+    /// the pointer has taken over, since nothing else outlives the modifier. A switcher left
+    /// open behind another application is the one failure it cannot have.
+    static var onDismissRequested: (() -> Void)?
+
+    private static var pointerTookOver = false
+    /// Where the pointer was when the panel appeared, so that taking the session over asks for
+    /// a deliberate movement rather than for the panel to have opened under the hand. The panel
+    /// opens in the middle of the screen, which is where a pointer usually already is.
+    private static var pointerAtReveal: NSPoint = .zero
+    /// How far the pointer has to travel before it is understood to be reaching for a tile.
+    private static let takeoverDistance: CGFloat = 12
+    /// Once the pointer owns the session nothing else will close the panel, so this bounds it:
+    /// a switcher that has been sitting open and untouched was not going to be used.
+    private static let pointerIdleLimit = 5.0
+    private static var pointerIdle: Timer?
+    /// The panel is shown late on purpose, so a ⌥Tab and release inside `revealDelay` switches
+    /// without anything appearing at all. AltTab's own default for this is 100 ms.
+    private static let revealDelay = 0.1
+    private static var reveal: Timer?
 
     /// Pays for the window, the view tree and the icon cache before anything is asked of them.
     static func warm() {
@@ -110,18 +138,29 @@ enum Panel {
     static func show(_ windows: [WindowInfo], selected: Int) {
         let panel = built()
         shown = windows
+        pointerTookOver = false
         layout(windows, selected: selected)
         requestPictures(for: windows)
 
         // Snapshot who had focus *before* we take it, so cancelling can put it back.
         previousApp = NSWorkspace.shared.frontmostApplication
 
-        // Order in before activating. Activating first would pull us to whichever Space macOS
-        // last associated this app with; putting the window up first means the Space we join
-        // is the one being looked at.
-        panel.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKey()
+        // Everything above is free and happens now; only the appearing waits. A switch made
+        // faster than the delay is one the eye never had time to want a panel for, and the
+        // flash of one is worse than no panel at all.
+        reveal?.invalidate()
+        reveal = Timer.scheduledTimer(withTimeInterval: revealDelay, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                pointerAtReveal = NSEvent.mouseLocation
+                // Order in before activating. Activating first would pull us to whichever Space
+                // macOS last associated this app with; putting the window up first means the
+                // Space we join is the one being looked at.
+                panel.orderFrontRegardless()
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKey()
+            }
+        }
+        RunLoop.main.add(reveal!, forMode: .common)
     }
 
     static func move(to index: Int) {
@@ -157,10 +196,19 @@ enum Panel {
     }
 
     private static func orderOut() {
+        // A panel still inside its delay is one that must never appear: the switch it was for
+        // has already happened.
+        reveal?.invalidate()
+        reveal = nil
+        pointerIdle?.invalidate()
+        pointerIdle = nil
         // Alpha first: ordering out goes through the WindowServer and can lag, and a panel that
         // is still painted after the switch reads as the switch not having happened.
         panel?.alphaValue = 0
         panel?.orderOut(nil)
+        // Ordering out from under the pointer delivers no exit event, and the tile would come
+        // back tinted on the next open.
+        for tile in tiles { tile.setHovered(false) }
         shown = []
     }
 
@@ -238,8 +286,42 @@ enum Panel {
         background.addSubview(note)
         noteField = note
 
+        // Clicking straight through to another application leaves the panel floating over it,
+        // because it is a floating panel that does not hide on deactivation. Only reachable
+        // after the pointer has taken over; before that the modifier ends the session first.
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
+                                               object: p, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                guard p.isVisible else { return }
+                onDismissRequested?()
+            }
+        }
+
         panel = p
         return p
+    }
+
+    fileprivate static func pointerMoved() {
+        guard pointerTookOver else {
+            let now = NSEvent.mouseLocation
+            let travelled = hypot(now.x - pointerAtReveal.x, now.y - pointerAtReveal.y)
+            guard travelled >= takeoverDistance else { return }
+            pointerTookOver = true
+            onPointerTakeover?()
+            keepAlive()
+            return
+        }
+        keepAlive()
+    }
+
+    /// Restarts the idle countdown. Called on every pointer movement, so the limit is time
+    /// since the hand stopped, not time since it started.
+    private static func keepAlive() {
+        pointerIdle?.invalidate()
+        pointerIdle = Timer.scheduledTimer(withTimeInterval: pointerIdleLimit, repeats: false) { _ in
+            MainActor.assumeIsolated { onDismissRequested?() }
+        }
+        RunLoop.main.add(pointerIdle!, forMode: .common)
     }
 
     /// A rounded rectangle that stretches: the corners are kept and only the middle is
@@ -329,8 +411,20 @@ enum Panel {
             tile.setPictureSize(CGSize(width: (pictures[i].width * fit).rounded(),
                                        height: (pictures[i].height * fit).rounded()))
             // Yesterday's picture, if there is one, so a window that has not changed is never
-            // shown as a blank slot while it is re-captured.
-            tile.setPicture(Thumbnails.cached(windows[i].id))
+            // shown as a blank slot while it is re-captured. A window off the screen has no
+            // capture coming to fill that slot, so when it has never had one the application's
+            // icon stands in — an empty slab reads as a broken tile, not as an absent window.
+            let picture = Thumbnails.cached(windows[i].id)
+            let offscreen = windows[i].isOffscreen
+            let standIn = picture == nil && offscreen ? self.icon(for: windows[i].pid) : nil
+            // The icon is given a square of its own rather than the window's slab: fitted to
+            // the whole area it comes out seven times the size of the icon in the title line
+            // above it, which reads as a mistake rather than as a window with no picture.
+            if standIn != nil {
+                let side = min(pictureArea, 96)
+                tile.setPictureSize(CGSize(width: side, height: side))
+            }
+            tile.setPicture(picture ?? standIn, faded: offscreen && picture != nil)
             tile.setSelected(i == selected)
         }
 
@@ -349,10 +443,14 @@ enum Panel {
     /// been rebuilt with a different set of windows.
     private static func requestPictures(for windows: [WindowInfo]) {
         guard Thumbnails.isPermitted else { return }
-        round = Thumbnails.capture(windows.map(\.id)) { id, image, generation in
+        // Windows off the screen are skipped rather than tried and failed: ScreenCaptureKit does
+        // not list them, so asking makes every open look like a stale window list and pay for a
+        // full `SCShareableContent` refresh that can never find them. Their last picture, taken
+        // while they were up, is still in the cache and is what the tile shows.
+        round = Thumbnails.capture(windows.filter { !$0.isOffscreen }.map(\.id)) { id, image, generation in
             guard generation == round, let index = shown.firstIndex(where: { $0.id == id }),
                   index < tiles.count else { return }
-            withoutAnimation { tiles[index].setPicture(image) }
+            withoutAnimation { tiles[index].setPicture(image, faded: false) }
         }
     }
 
@@ -384,9 +482,12 @@ enum Panel {
         private let iconLayer = CALayer()
         private let labelLayer = CATextLayer()
         private let crossLayer = CALayer()
+        private let awayLayer = CALayer()
         private var text = ""
         private var subject: WindowInfo?
         private var isHot = false
+        private var isHovered = false
+        private var isSelected = false
         private var pictureSize: CGSize = .zero
 
         // AltTab's own 14, at semibold: the weight carries the emphasis, so the size does not
@@ -421,13 +522,16 @@ enum Panel {
             labelLayer.alignmentMode = .left
             crossLayer.contents = Self.cross
             crossLayer.isHidden = true
-            for sublayer in [pictureLayer, iconLayer, labelLayer, crossLayer] as [CALayer] {
+            awayLayer.contents = Self.away
+            awayLayer.isHidden = true
+            for sublayer in [pictureLayer, iconLayer, labelLayer, crossLayer, awayLayer] as [CALayer] {
                 sublayer.actions = Self.still
             }
             layer?.addSublayer(pictureLayer)
             layer?.addSublayer(iconLayer)
             layer?.addSublayer(labelLayer)
             layer?.addSublayer(crossLayer)
+            layer?.addSublayer(awayLayer)
         }
 
         required init?(coder: NSCoder) { fatalError() }
@@ -450,10 +554,20 @@ enum Panel {
             iconLayer.frame = CGRect(x: inset, y: bounds.height - inset - iconSide,
                                      width: iconSide, height: iconSide)
 
+            // At the far end of the title line, which is the one part of a tile where nothing is
+            // clickable — so a mark there is read as a state and not as a button, unlike the
+            // same mark next to the close cross.
+            let mark = Self.awaySide
+            awayLayer.frame = CGRect(x: bounds.width - inset - mark,
+                                     y: iconLayer.frame.midY - mark / 2,
+                                     width: mark, height: mark)
+
             let textHeight = (text as NSString).size(withAttributes: [.font: Self.font]).height
-            labelLayer.frame = CGRect(x: iconLayer.frame.maxX + 4,
+            let afterIcon = iconLayer.frame.maxX + 1
+            let labelEnd = awayLayer.isHidden ? bounds.width - inset : awayLayer.frame.minX - 4
+            labelLayer.frame = CGRect(x: afterIcon,
                                       y: iconLayer.frame.midY - textHeight / 2,
-                                      width: max(bounds.width - inset - (iconLayer.frame.maxX + 4), 0),
+                                      width: max(labelEnd - afterIcon, 0),
                                       height: textHeight)
 
             // Centred in what is left under the header, at the size it was given.
@@ -477,6 +591,9 @@ enum Panel {
             text = label
             labelLayer.string = label
             self.subject = subject
+            // A window that is not on the screen says so in the title line, whatever ends up in
+            // the picture slot below.
+            awayLayer.isHidden = !subject.isOffscreen
             needsLayout = true
         }
 
@@ -485,19 +602,41 @@ enum Panel {
             needsLayout = true
         }
 
-        func setPicture(_ image: NSImage?) {
+        /// `faded` is for a picture that is no longer true: the window is in the Dock or behind
+        /// a hidden application, and this is what it looked like the last time it was up. The
+        /// icon standing in for a window that was never photographed is not faded — it is not a
+        /// stale likeness, it is the only thing there is to draw.
+        func setPicture(_ image: NSImage?, faded: Bool) {
             pictureLayer.contents = image
+            pictureLayer.opacity = faded ? 0.45 : 1
             needsLayout = true
         }
 
         func setSelected(_ selected: Bool) {
-            // The system accent colour, which is the blue AltTab uses — it reads
-            // `controlAccentColor`, so both follow whatever the user set in System Settings.
-            layer?.backgroundColor = selected
-                ? NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor
-                : NSColor.clear.cgColor
-            layer?.borderColor = NSColor.controlAccentColor.cgColor
-            layer?.borderWidth = selected ? 3 : 0
+            isSelected = selected
+            paint()
+        }
+
+        func setHovered(_ hovered: Bool) {
+            guard hovered != isHovered else { return }
+            isHovered = hovered
+            Panel.withoutAnimation { paint() }
+        }
+
+        /// The system accent colour, which is the blue AltTab uses — it reads
+        /// `controlAccentColor`, so both follow whatever the user set in System Settings.
+        /// The pointer lights the tile it is over the same way, only fainter — fill and border
+        /// both — so the selection is still the stronger of the two when they differ.
+        private func paint() {
+            let accent = NSColor.controlAccentColor
+            let tint: CGFloat = isSelected ? 0.2 : (isHovered ? 0.11 : 0)
+            layer?.backgroundColor = tint == 0
+                ? NSColor.clear.cgColor
+                : accent.withAlphaComponent(tint).cgColor
+            layer?.borderColor = isSelected
+                ? accent.cgColor
+                : accent.withAlphaComponent(0.55).cgColor
+            layer?.borderWidth = isSelected || isHovered ? 3 : 0
         }
 
         // MARK: - The cross
@@ -512,15 +651,21 @@ enum Panel {
                                            owner: self))
         }
 
-        override func mouseEntered(with event: NSEvent) { showCross(true) }
+        override func mouseEntered(with event: NSEvent) {
+            showCross(true)
+            setHovered(true)
+        }
 
         override func mouseExited(with event: NSEvent) {
             showCross(false)
             setHot(false)
+            setHovered(false)
         }
 
         override func mouseMoved(with event: NSEvent) {
             setHot(isOnCross(convert(event.locationInWindow, from: nil)))
+            setHovered(true)
+            Panel.pointerMoved()
         }
 
         private func setHot(_ hot: Bool) {
@@ -536,8 +681,12 @@ enum Panel {
         }
 
         override func mouseDown(with event: NSEvent) {
-            guard isOnCross(convert(event.locationInWindow, from: nil)), let subject else { return }
-            Panel.onCloseRequested?(subject)
+            guard let subject else { return }
+            if isOnCross(convert(event.locationInWindow, from: nil)) {
+                Panel.onCloseRequested?(subject)
+            } else {
+                Panel.onPicked?(subject)
+            }
         }
 
         private func showCross(_ visible: Bool) {
@@ -572,5 +721,27 @@ enum Panel {
 
         private static let cross = crossImage(hot: false)
         private static let crossHot = crossImage(hot: true)
+
+        /// The mark on a window that is not on the screen: a chevron pointing down onto a bar,
+        /// which is where the window went and how it comes back. Drawn once and shared.
+        static let awaySide: CGFloat = 13
+        private static let away: NSImage = {
+            let side = awaySide
+            return NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+                let path = NSBezierPath()
+                let mid = rect.midX
+                path.move(to: NSPoint(x: mid - 3.5, y: rect.maxY - 4.5))
+                path.line(to: NSPoint(x: mid, y: rect.maxY - 8))
+                path.line(to: NSPoint(x: mid + 3.5, y: rect.maxY - 4.5))
+                path.move(to: NSPoint(x: mid - 4, y: rect.minY + 1.5))
+                path.line(to: NSPoint(x: mid + 4, y: rect.minY + 1.5))
+                path.lineWidth = 1.6
+                path.lineCapStyle = .round
+                path.lineJoinStyle = .round
+                NSColor.secondaryLabelColor.setStroke()
+                path.stroke()
+                return true
+            }
+        }()
     }
 }

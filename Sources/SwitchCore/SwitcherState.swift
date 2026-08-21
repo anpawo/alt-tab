@@ -4,8 +4,12 @@ import CoreGraphics
 /// machine opens, `.next` on an open one advances. All the state lives here, so the trigger
 /// is stateless and cannot tell the first Tab from the third — which is what lets ⌥Tab and a
 /// future ⌘Tab emit identical streams.
-public enum SwitchCommand {
+public enum SwitchCommand: Equatable {
     case next
+    /// A window named outright rather than stepped to — the pointer clicking a tile. It commits
+    /// in the same breath, because a click is the whole gesture and there is no modifier left
+    /// to release afterwards.
+    case pick(CGWindowID)
     case commit
     case cancel
     case abort
@@ -72,6 +76,13 @@ public struct SwitcherState {
             selected = windows[next].id
             previousIndex = next
             return .move(next)
+
+        case let .pick(id):
+            // Unguarded by `isOpen`: a tile can only be clicked while the panel is up, and the
+            // click is answered by the window it named, not by whatever the keyboard had.
+            guard let window = windows.first(where: { $0.id == id }) else { return nil }
+            selected = nil
+            return .raise(window)
 
         case .commit:
             // A modifier released while nothing is open is the common case, not an error:

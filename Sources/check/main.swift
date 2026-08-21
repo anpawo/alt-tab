@@ -86,6 +86,24 @@ scenario("committing raises the window that was selected") {
     expect(state.isOpen == false, "stayed open after committing")
 }
 
+scenario("clicking a tile raises that window, not the one under the keyboard") {
+    let list = windows(3)
+    var state = SwitcherState()
+    _ = state.handle(.next, windows: list)
+    guard case let .raise(window)? = state.handle(.pick(list[2].id), windows: list) else {
+        return expect(false, "a click raised nothing")
+    }
+    expect(window.id == list[2].id, "raised the selection instead of the tile clicked")
+    expect(state.isOpen == false, "stayed open after a click")
+}
+
+scenario("a click on a window that is already gone raises nothing") {
+    let list = windows(3)
+    var state = SwitcherState()
+    _ = state.handle(.next, windows: list)
+    expect(state.handle(.pick(list[2].id), windows: [list[0]]) == nil, "raised a window that had gone")
+}
+
 scenario("cancelling never raises anything") {
     let list = windows(3)
     var state = SwitcherState()
@@ -111,11 +129,20 @@ scenario("a window that vanished between opening and committing is not raised") 
     expect(state.handle(.commit, windows: [list[0]]) == .hide, "raised a stale index")
 }
 
-scenario("only standard, non-minimized windows are offered") {
-    expect(Filter.isSwitchable(subrole: kAXStandardWindowSubrole, isMinimized: false), "rejected a standard window")
-    expect(!Filter.isSwitchable(subrole: kAXDialogSubrole, isMinimized: false), "accepted a dialog")
-    expect(!Filter.isSwitchable(subrole: nil, isMinimized: false), "accepted a window with no subrole")
-    expect(!Filter.isSwitchable(subrole: kAXStandardWindowSubrole, isMinimized: true), "accepted a minimized window")
+scenario("only standard windows are offered, and absent ones despite their subrole") {
+    func offered(_ subrole: String?, minimized: Bool = false, appHidden: Bool = false) -> Bool {
+        Filter.isSwitchable(subrole: subrole, isMinimized: minimized, isAppHidden: appHidden)
+    }
+    expect(offered(kAXStandardWindowSubrole), "rejected a standard window")
+    expect(!offered(kAXDialogSubrole), "accepted a dialog")
+    expect(!offered(nil), "accepted a window with no subrole")
+    // Leaving the screen rewrites the subrole to AXDialog, so this is the only way a window in
+    // the Dock or behind a hidden app is ever seen. Mutation target: refusing it makes both
+    // kinds unreachable, which is how they were missing in the first place.
+    expect(offered(kAXDialogSubrole, minimized: true), "rejected a minimized window")
+    expect(offered(kAXDialogSubrole, appHidden: true), "rejected a hidden app's window")
+    expect(offered(kAXStandardWindowSubrole, minimized: true), "rejected a minimized standard window")
+    expect(!offered(nil, minimized: true), "accepted a minimized non-window")
 }
 
 scenario("our own panel is never in our own list") {

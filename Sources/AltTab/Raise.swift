@@ -40,6 +40,14 @@ enum WindowAction {
             // window itself. Its application can still be brought forward.
             return app?.activate() ?? false
         }
+        // Putting the window back on the screen first, because `AXRaise` on one that is not
+        // there is answered with success and does nothing. The two absences are undone by
+        // different calls: un-hiding is about the application, un-minimizing about the window,
+        // and a hidden application's minimized window needs both.
+        if window.isAppHidden { app?.unhide() }
+        if window.isMinimized {
+            AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
         let raised = AXUIElementPerformAction(element, kAXRaiseAction as CFString) == .success
         app?.activate()
         return raised

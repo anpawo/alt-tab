@@ -12,11 +12,16 @@ public enum Filter {
     /// An area floor was tried first and measured useless: the junk that survives it is a
     /// swarm of full-width 1470×33 surfaces well above any floor worth setting, while a
     /// genuinely small utility window falls under it.
-    public static func isSwitchable(subrole: String?, isMinimized: Bool) -> Bool {
-        guard subrole == kAXStandardWindowSubrole else { return false }
-        // Minimized windows have no Z position, so including them would put entries in the
-        // list that the ordering cannot place. Excluded by choice, not by accident.
-        return !isMinimized
+    /// Leaving the screen changes a window's subrole. Minimized, or belonging to a hidden
+    /// application, it answers `AXDialog` whatever it was while it was up — so a filter that
+    /// asks only for `AXStandardWindow` cannot see either kind, which is why both looked
+    /// structurally impossible to list rather than merely absent.
+    ///
+    /// `AXDialog` is accepted only on that evidence. A dialog that is genuinely on screen is
+    /// neither minimized nor owned by a hidden app, so it is still refused.
+    public static func isSwitchable(subrole: String?, isMinimized: Bool, isAppHidden: Bool) -> Bool {
+        if subrole == kAXStandardWindowSubrole { return true }
+        return (isMinimized || isAppHidden) && subrole == kAXDialogSubrole
     }
 
     /// Our own panel is a titled, layer-0, standard window, and the panel activates — so

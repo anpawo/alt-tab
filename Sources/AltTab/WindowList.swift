@@ -151,16 +151,27 @@ enum WindowList {
 
         // Snapshot main-owned state before leaving the main thread.
         var names: [pid_t: String] = [:]
+        var hidden: [pid_t: Bool] = [:]
         for app in NSWorkspace.shared.runningApplications {
             names[app.processIdentifier] = app.localizedName ?? "—"
+            hidden[app.processIdentifier] = app.isHidden
         }
-        let pids = Set(ordered.map(\.pid))
+        // Every regular application, not only those holding an on-screen window: an app whose
+        // windows are all minimized owns nothing that `CGWindowList` reports, and asking only
+        // about the pids it named would be asking only about windows we can already see.
+        // Our own pid is removed by hand — the CG loop above filters it, and nothing here would
+        // while the settings window has us running as a regular app.
+        var pids = Set(ordered.map(\.pid))
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            pids.insert(app.processIdentifier)
+        }
+        pids.remove(selfPID)
         let handles = pids.reduce(into: [pid_t: AXUIElement]()) { $0[$1] = element(for: $1) }
 
         // Concurrent, because a wedged app costs the timeout and serial sweeps make that
         // per-app instead of once.
         let lock = NSLock()
-        var seen: [CGWindowID: (title: String, element: AXUIElement)] = [:]
+        var seen: [CGWindowID: (title: String, element: AXUIElement, minimized: Bool, size: CGSize, pid: pid_t)] = [:]
         // Which apps actually answered. An app that did not is not the same as an app with
         // nothing to show, and the two must not collapse: the first still owns windows the
         // user wants to reach, we just cannot name or address them.
@@ -169,25 +180,37 @@ enum WindowList {
         let queue = DispatchQueue(label: "alt-tab.ax", qos: .userInteractive, attributes: .concurrent)
 
         for (pid, app) in handles {
+            let appHidden = hidden[pid] ?? false
             queue.async(group: group) {
                 var value: CFTypeRef?
                 guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
                       let windows = value as? [AXUIElement] else { return }
 
-                var found: [CGWindowID: (String, AXUIElement)] = [:]
+                var found: [CGWindowID: (String, AXUIElement, Bool, CGSize, pid_t)] = [:]
                 for window in windows {
                     guard let id = windowID(of: window) else { continue }
                     var subroleValue: CFTypeRef?
                     AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subroleValue)
                     var minimizedValue: CFTypeRef?
                     AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue)
+                    let minimized = (minimizedValue as? Bool) ?? false
                     guard Filter.isSwitchable(subrole: subroleValue as? String,
-                                              isMinimized: (minimizedValue as? Bool) ?? false)
-                    else { continue }
+                                              isMinimized: minimized,
+                                              isAppHidden: appHidden) else { continue }
 
                     var titleValue: CFTypeRef?
                     AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue)
-                    found[id] = ((titleValue as? String) ?? "", window)
+                    // Only windows off the screen need this: for the rest `CGWindowList` already
+                    // gave a size, and this is an extra round trip per window.
+                    var size = CGSize.zero
+                    if minimized || appHidden {
+                        var sizeValue: CFTypeRef?
+                        if AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
+                           let sizeValue, CFGetTypeID(sizeValue) == AXValueGetTypeID() {
+                            AXValueGetValue(unsafeBitCast(sizeValue, to: AXValue.self), .cgSize, &size)
+                        }
+                    }
+                    found[id] = ((titleValue as? String) ?? "", window, minimized, size, pid)
                 }
                 lock.lock()
                 seen.merge(found) { a, _ in a }
@@ -202,9 +225,13 @@ enum WindowList {
         let replied = answered
         lock.unlock()
 
-        return ordered.compactMap { entry in
+        var rows: [WindowInfo] = ordered.compactMap { entry in
             let name = names[entry.pid] ?? "—"
             if let hit = resolved[entry.id] {
+                // On screen and minimized at once is a contradiction the WindowServer briefly
+                // allows, mid-animation. Accessibility is the one that knows, so it wins, and
+                // the window is picked up by the pass below instead.
+                guard !hit.minimized, hidden[entry.pid] != true else { return nil }
                 return WindowInfo(id: entry.id, pid: entry.pid, appName: name,
                                   title: hit.title.isEmpty ? name : hit.title,
                                   element: hit.element, size: entry.size)
@@ -217,6 +244,28 @@ enum WindowList {
             return WindowInfo(id: entry.id, pid: entry.pid, appName: name, title: name,
                               element: nil, size: entry.size)
         }
+
+        // The windows that are not on the screen, after all of the ones that are. There is no
+        // honest place for them among the rest: Z order is the most-recently-used order, and a
+        // window in the Dock or behind a hidden application has no Z position at all — so they
+        // go at the end, sorted by name rather than by whatever order a concurrent sweep
+        // happened to finish in, which would reshuffle between two opens.
+        let offscreen = resolved.filter { $0.value.minimized || hidden[$0.value.pid] == true }
+        if !offscreen.isEmpty {
+            let here = onCurrentSpace(Array(offscreen.keys))
+            rows += offscreen
+                .filter { here.contains($0.key) }
+                .map { id, hit -> WindowInfo in
+                    let name = names[hit.pid] ?? "—"
+                    return WindowInfo(id: id, pid: hit.pid, appName: name,
+                                      title: hit.title.isEmpty ? name : hit.title,
+                                      element: hit.element, size: hit.size,
+                                      isMinimized: hit.minimized,
+                                      isAppHidden: hidden[hit.pid] == true)
+                }
+                .sorted { ($0.appName, $0.title, $0.id) < ($1.appName, $1.title, $1.id) }
+        }
+        return rows
     }
 
     /// The window a process currently considers focused, if it has one.

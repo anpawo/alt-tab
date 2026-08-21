@@ -28,6 +28,10 @@ enum Trigger {
     private static var monitor: Any?
     private static var escape: Any?
     private static var release: Timer?
+    /// Set when the pointer takes the session over. The modifier is then just a key that is
+    /// down: releasing it decides nothing, because the hand that would have decided is on the
+    /// mouse.
+    private static var holdAbandoned = false
 
     /// Which modifier, once released, means "go". Read from whatever `next` is currently bound
     /// to, so rebinding the chord rebinds the release along with it.
@@ -54,9 +58,10 @@ enum Trigger {
         // is up, so a local monitor is enough, and a chord registered system-wide would take a
         // key from every application for something reachable only in this half-second.
         escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 53,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
-            else { return event }
+            // Whatever is held with it. The panel is only ever key while a session is open, and
+            // the modifier that opened it is by definition still down for most of that — an
+            // Escape that insisted on being pressed alone was an Escape that never arrived.
+            guard event.keyCode == 53 else { return event }
             emit?(.cancel)
             return nil
         }
@@ -67,7 +72,7 @@ enum Trigger {
             // Cleaned before comparing: local monitors emit bits nobody asked for, including
             // the function-key bit, and a raw equality test against them never matches.
             let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if !held.contains(holdModifier) { emit?(.commit) }
+            if !holdAbandoned, !held.contains(holdModifier) { emit?(.commit) }
             return event
         }
 
@@ -124,6 +129,7 @@ enum Trigger {
     /// `flagsState` is the live state of the keyboard, readable from a background process with
     /// no grant of any kind. Polling it costs a timer for the half-second the panel is up.
     static func watchForRelease() {
+        holdAbandoned = false
         release?.invalidate()
         release = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
             MainActor.assumeIsolated {
@@ -141,6 +147,14 @@ enum Trigger {
     static func stopWatchingForRelease() {
         release?.invalidate()
         release = nil
+    }
+
+    /// Hands the session to the pointer: the release that would have committed is ignored, and
+    /// the panel stays up until something is clicked or Escape is pressed.
+    static func abandonHold() {
+        release?.invalidate()
+        release = nil
+        holdAbandoned = true
     }
 
     private static func carbonFlag(_ modifier: NSEvent.ModifierFlags) -> CGEventFlags {
