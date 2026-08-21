@@ -83,6 +83,7 @@ enum Trigger {
     @discardableResult
     static func apply(_ shortcuts: [Binding: Shortcut]) -> Bool {
         suspend()
+        reconcileSystemChords(with: shortcuts)
 
         let commands: [Binding: SwitchCommand] = [.next: .next]
         var ok = true
@@ -103,6 +104,32 @@ enum Trigger {
             holdModifier = appKitModifier(hold)
         }
         return ok
+    }
+
+    /// Switches off the system chords the new bindings need, and gives back the ones they do
+    /// not.
+    ///
+    /// This is the one thing alt-tab does that outlives it: a symbolic hot key stays off until
+    /// something turns it back on. So the set is written down before it is acted on — a copy
+    /// that dies here must leave a record of what it took, or the only way back is a flag on a
+    /// binary the user no longer has a reason to keep.
+    private static func reconcileSystemChords(with shortcuts: [Binding: Shortcut]) {
+        let wanted = Set(shortcuts.values.flatMap(\.systemChords))
+        let held = Set(Shortcuts.suppressedSystemChords)
+        // Applied every time, not only when the set changed. What we wrote down is what we
+        // asked for, not what is true: a login, a system update or another switcher can hand a
+        // chord back without telling us, and a record that says we still hold it would then
+        // stop us from ever taking it again.
+        Shortcuts.suppressedSystemChords = Array(wanted).sorted()
+        SymbolicHotKeys.set(Array(held.subtracting(wanted)).sorted(), enabled: true)
+        SymbolicHotKeys.set(Array(wanted).sorted(), enabled: false)
+    }
+
+    /// Gives every system chord back, whatever we are holding. The deliberate exits go through
+    /// here: quitting with ⌘Tab still switched off leaves a machine with no switcher at all.
+    static func releaseSystemChords() {
+        Shortcuts.suppressedSystemChords = []
+        SymbolicHotKeys.restoreSystemSwitcher()
     }
 
     /// Hands every chord back to the system.

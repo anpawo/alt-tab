@@ -42,15 +42,28 @@ public struct Shortcut: Equatable, Hashable {
     /// would take that key away from every application on the machine.
     public var isValid: Bool { holdModifier != nil }
 
-    /// ⌘Tab, ⌘⇧Tab and ⌘` are consumed by the Dock before any application-level hotkey is
-    /// consulted. Registering one succeeds — it returns no error — and then never fires, which
-    /// is the worst failure shape available: it reads as our own bug. Detected so it can be
-    /// refused with an explanation instead.
-    public var isClaimedByMacOS: Bool {
-        let withoutShift = modifiers.subtracting(.shift)
-        guard withoutShift == .command else { return false }
-        return keyCode == 48 || keyCode == 50    // Tab, `
+    /// The system chords this one collides with, by symbolic hot key id: 1 is ⌘Tab, 2 its
+    /// reverse, 6 is ⌘`.
+    ///
+    /// The Dock consumes these before any application-level hotkey is consulted. Registering
+    /// one succeeds — it returns no error — and then never fires, which is the worst failure
+    /// shape available: it reads as our own bug. The only way to hold such a chord is to switch
+    /// the system's own off first, which is what this list is for.
+    ///
+    /// ⌘Tab takes 2 along with 1. Leaving the reverse alive would put Apple's switcher back on
+    /// the screen the moment you added shift to the chord you just rebound.
+    public var systemChords: [Int32] {
+        guard modifiers.subtracting(.shift) == .command else { return [] }
+        switch keyCode {
+        case 48: return [1, 2]      // Tab
+        case 50: return [6]         // `
+        default: return []
+        }
     }
+
+    /// Whether holding this chord means taking it away from macOS — a decision with
+    /// consequences that outlive the app, so it is never made silently.
+    public var takesOverSystemChord: Bool { !systemChords.isEmpty }
 
     /// Apple's canonical order: ⌃⌥⇧⌘, then the key.
     public var label: String {

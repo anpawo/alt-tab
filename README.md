@@ -8,12 +8,16 @@ in most-recently-used order, with its own title and a picture of itself.
 
 Hold ⌥ and press Tab. Let ⌥ go and you are there. That is the whole product.
 
-**⌥Tab, and not ⌘Tab, on purpose.** Taking ⌘Tab would mean switching the system's own switcher
-off, and that is a setting which outlives the app that changed it — uninstall carelessly and
-the machine is left with no switcher at all. So alt-tab binds a chord nobody owns and leaves
-yours alone: both are there, you can use one and then the other on the same desktop and decide
-which you actually want. If that turns out to be this one, the shortcut is yours to change in
-the settings — including to ⌘Tab, once you mean it.
+**⌥Tab by default, and not ⌘Tab, on purpose.** The Dock consumes ⌘Tab before any application
+sees it, so holding that chord means switching Apple's switcher off — and that setting outlives
+the app that changed it. A default that did so would take the machine's switcher away from
+someone who asked for nothing. So alt-tab starts on a chord nobody owns: both switchers are
+there, you use one and then the other on the same desktop, and you decide.
+
+If you decide on this one, **the settings will give you ⌘Tab**. alt-tab then switches the
+system chord off while it holds it, and hands it back when you quit it or run `./uninstall.sh`.
+If a crash ever leaves you without one, `alt-tab --restore-hotkeys` returns it, and it works
+with no GUI at all.
 
 ## Install
 
@@ -55,7 +59,7 @@ you quit and reopen the app — not the moment you grant it.
 
 | | |
 |---|---|
-| **⌥Tab** | open the switcher, and step through the windows |
+| **⌥Tab** | open the switcher, and step through the windows — or whatever chord you bound |
 | **let ⌥ go** | switch to the selected window |
 | **Escape** | change your mind |
 | **click a tile** | switch to that window — with ⌥ still held, since letting go ends the session |

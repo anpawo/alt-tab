@@ -17,18 +17,28 @@ import SwitchCore
 enum SymbolicHotKeys {
     private typealias SetEnabled = @convention(c) (Int32, Bool) -> Int32
 
-    static func restoreSystemSwitcher() {
+    /// 1 ⌘Tab · 2 ⌘⇧Tab · 6 ⌘` — collected, not picked: the pick used to come from iterating a
+    /// dictionary, whose order is not stable across launches, so which chord got restored
+    /// varied per run.
+    static let all: [Int32] = [1, 2, 6]
+
+    private static let setEnabled: SetEnabled? = {
         guard let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY),
-              let symbol = dlsym(handle, "CGSSetSymbolicHotKeyEnabled") else {
+              let symbol = dlsym(handle, "CGSSetSymbolicHotKeyEnabled") else { return nil }
+        return unsafeBitCast(symbol, to: SetEnabled.self)
+    }()
+
+    @discardableResult
+    static func set(_ ids: [Int32], enabled: Bool) -> Bool {
+        guard let setEnabled else {
             FileHandle.standardError.write(Data("alt-tab: CGSSetSymbolicHotKeyEnabled is gone on this macOS\n".utf8))
-            return
+            return false
         }
-        let setEnabled = unsafeBitCast(symbol, to: SetEnabled.self)
-        // 1 ⌘Tab · 2 ⌘⇧Tab · 6 ⌘` — collected, not picked: the pick used to come from
-        // iterating a dictionary, whose order is not stable across launches, so which chord got
-        // restored varied per run.
-        for id: Int32 in [1, 2, 6] { _ = setEnabled(id, true) }
+        for id in ids { _ = setEnabled(id, enabled) }
+        return true
     }
+
+    static func restoreSystemSwitcher() { set(all, enabled: true) }
 }
 
 let arguments = Set(CommandLine.arguments.dropFirst())

@@ -175,14 +175,19 @@ scenario("a chord with nothing to hold is refused") {
     expect(Shortcut(keyCode: escape, modifiers: .control).isValid, "⌃Esc was refused")
 }
 
-scenario("the chords macOS keeps for itself are recognised") {
-    // Registering one of these succeeds and then never fires, which reads as our own bug.
-    expect(Shortcut(keyCode: tab, modifiers: .command).isClaimedByMacOS, "⌘Tab not flagged")
-    expect(Shortcut(keyCode: tab, modifiers: [.command, .shift]).isClaimedByMacOS, "⌘⇧Tab not flagged")
-    expect(Shortcut(keyCode: backtick, modifiers: .command).isClaimedByMacOS, "⌘` not flagged")
-    expect(!Shortcut(keyCode: tab, modifiers: .option).isClaimedByMacOS, "⌥Tab wrongly flagged")
-    expect(!Shortcut(keyCode: tab, modifiers: [.command, .option]).isClaimedByMacOS,
+scenario("the chords macOS keeps for itself name what has to be switched off") {
+    // Registering one of these succeeds and then never fires, unless the system's own is off
+    // first — so the list of ids is the difference between a working chord and a silent one.
+    expect(Shortcut(keyCode: tab, modifiers: .command).systemChords == [1, 2], "⌘Tab misread")
+    // The reverse goes with it: leaving 2 alive puts Apple's switcher back on the screen the
+    // moment shift joins the chord that was just rebound.
+    expect(Shortcut(keyCode: tab, modifiers: [.command, .shift]).systemChords == [1, 2], "⌘⇧Tab misread")
+    expect(Shortcut(keyCode: backtick, modifiers: .command).systemChords == [6], "⌘` misread")
+    expect(Shortcut(keyCode: tab, modifiers: .option).systemChords.isEmpty, "⌥Tab wrongly flagged")
+    expect(Shortcut(keyCode: tab, modifiers: [.command, .option]).systemChords.isEmpty,
            "⌥⌘Tab wrongly flagged — macOS only claims the plain and shifted forms")
+    expect(Shortcut(keyCode: tab, modifiers: .command).takesOverSystemChord, "⌘Tab not flagged")
+    expect(!Shortcut(keyCode: tab, modifiers: .option).takesOverSystemChord, "⌥Tab wrongly flagged")
 }
 
 scenario("chords are written the way macOS writes them") {
@@ -196,7 +201,9 @@ scenario("chords are written the way macOS writes them") {
 scenario("there is one binding, and its default is ⌥Tab") {
     expect(Binding.allCases.count == 1, "a binding came back")
     expect(Binding.next.fallback.label == "⌥Tab", "the default changed")
-    expect(Binding.allCases.allSatisfy { $0.fallback.isValid && !$0.fallback.isClaimedByMacOS },
+    // A default that took a system chord would switch Apple's switcher off on first launch,
+    // for someone who asked for nothing.
+    expect(Binding.allCases.allSatisfy { $0.fallback.isValid && !$0.fallback.takesOverSystemChord },
            "a default is unusable")
 }
 

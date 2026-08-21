@@ -306,6 +306,9 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
         task.standardError = FileHandle.nullDevice
         try? task.run()
         task.waitUntilExit()
+        // Before going, not after: quitting while still holding ⌘Tab would leave the machine
+        // with no switcher at all and nothing running to explain it.
+        Trigger.releaseSystemChords()
         NSApp.terminate(nil)
     }
 
@@ -351,16 +354,15 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
                 + "take that key from every app."
             return
         }
-        guard !shortcut.isClaimedByMacOS else {
-            status.stringValue = "macOS keeps \(shortcut.label) for its own switcher and never "
-                + "passes it on. Taking it means switching the system one off, which outlives "
-                + "this app — so it is not offered here."
-            return
-        }
-
         Shortcuts.set(shortcut, for: binding)
         stopRecording()
-        status.stringValue = "\(binding.title) is now \(shortcut.label)."
+        // Said plainly rather than refused. The Dock consumes these before any application sees
+        // them, so holding one means switching Apple's switcher off — which stays off until
+        // something turns it back on. Quitting alt-tab and uninstalling both do.
+        status.stringValue = shortcut.takesOverSystemChord
+            ? "\(binding.title) is now \(shortcut.label), and macOS no longer answers it — "
+                + "its own switcher is off for as long as alt-tab holds the chord."
+            : "\(binding.title) is now \(shortcut.label)."
     }
 
     private func stopRecording() {

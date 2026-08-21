@@ -20,6 +20,16 @@ enum Shortcuts {
         defaults.set(Int(shortcut.modifiers.rawValue), forKey: "\(binding.rawValue).modifiers")
     }
 
+    /// Which system chords we currently hold switched off.
+    ///
+    /// Kept on disk rather than in memory because that is the shape of the problem: disabling a
+    /// symbolic hot key outlives the process that did it, so a copy that is killed, or replaced
+    /// by a build that binds something else, has to be able to find out what the last one took.
+    static var suppressedSystemChords: [Int32] {
+        get { (defaults.array(forKey: "suppressedSystemChords") as? [Int] ?? []).map(Int32.init) }
+        set { defaults.set(newValue.map(Int.init), forKey: "suppressedSystemChords") }
+    }
+
     static func reset() {
         for binding in Binding.allCases {
             defaults.removeObject(forKey: "\(binding.rawValue).keyCode")
