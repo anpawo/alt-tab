@@ -187,8 +187,12 @@ enum WindowList {
                       let windows = value as? [AXUIElement] else { return }
 
                 var found: [CGWindowID: (String, AXUIElement, Bool, CGSize, pid_t)] = [:]
+                // How many of them we could put a window id to. An answer we could read nothing
+                // out of is not an answer, and the rule below turns on that difference.
+                var identified = 0
                 for window in windows {
                     guard let id = windowID(of: window) else { continue }
+                    identified += 1
                     var subroleValue: CFTypeRef?
                     AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subroleValue)
                     var minimizedValue: CFTypeRef?
@@ -214,7 +218,14 @@ enum WindowList {
                 }
                 lock.lock()
                 seen.merge(found) { a, _ in a }
-                answered.insert(pid)
+                // Claimed only on a reply we could use. Accessibility comes back wrong from
+                // time to time — success and an empty list for an application plainly holding
+                // windows, or a list of elements that every call then rejects — and the rule
+                // this feeds drops a window on the strength of its application having spoken.
+                // Measured here: six windows on screen and two in the list, and once none at
+                // all. Silence is the honest reading of an answer with nothing in it, and the
+                // lenient path below then keeps those windows, unnamed but reachable.
+                if identified > 0 { answered.insert(pid) }
                 lock.unlock()
             }
         }
