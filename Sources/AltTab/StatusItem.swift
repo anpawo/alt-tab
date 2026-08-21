@@ -1,11 +1,27 @@
 import AppKit
 import SwitchCore
 
-/// The menu bar presence: a small Tab key.
+/// Whether there is a menu bar icon at all.
 ///
-/// This is the only place alt-tab is visible when the panel is down, so it is also the answer
-/// to "is it running" — a background agent with no Dock icon and no window has nothing else to
-/// say so with.
+/// There is none by default: alt-tab is meant to be a key combination and nothing else, and a
+/// background agent that plants a permanent icon to say "I exist" is charging the menu bar rent
+/// for information nobody asked for. The icon appears while the settings window is open — that
+/// is what opening the application does — and goes away with it, unless it has been asked to
+/// stay.
+@MainActor
+enum MenuBar {
+
+    private static var controller: StatusItemController?
+
+    static var isVisible: Bool { controller != nil }
+
+    static func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        controller = visible ? StatusItemController() : nil
+    }
+}
+
+/// The menu bar presence: a small Tab key.
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
 
@@ -20,6 +36,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // Attached permanently rather than popped on demand: the whole of this item is its
         // menu, so a left click should open it.
         item.menu = menu
+    }
+
+    deinit {
+        // The status bar owns its items; dropping the controller is not enough to take the icon
+        // out of the menu bar, and `MainActor.assumeIsolated` is the only way to say so from a
+        // deinit that the compiler cannot see is already on the main thread.
+        MainActor.assumeIsolated { NSStatusBar.system.removeStatusItem(item) }
     }
 
     /// A key cap with a tab arrow in it, drawn rather than borrowed from SF Symbols: the symbol
@@ -55,31 +78,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         PreferencesWindow.shared.show()
     }
 
-    /// `NSApp.terminate` alone is not enough: the LaunchAgent has KeepAlive set, so launchd
-    /// brings us straight back. Unloading the job stops that until the next login re-loads it.
-    /// Launched by hand there is no job, and the terminate below covers it.
-    @objc private func quit() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        task.arguments = ["bootout", "gui/\(getuid())/com.mr.alttab"]
-        try? task.run()
-        task.waitUntilExit()
-        NSApp.terminate(nil)
-    }
-
-    /// Both, because neither alone lands the user anywhere useful: the request puts the prompt
-    /// up the first time and does nothing ever after, and the pane is the only route once it has
-    /// been answered. The answer is latched for the life of the process either way, so this says
-    /// so rather than pretending pictures will appear.
-    @objc private func requestScreenRecording() {
-        Thumbnails.requestAccess()
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
-        NSWorkspace.shared.open(url)
-        let alert = NSAlert()
-        alert.messageText = "Quit and reopen alt-tab once it is allowed"
-        alert.informativeText = "macOS answers this question once per launch, so window pictures "
-            + "start appearing at the next one."
-        alert.runModal()
+    /// Takes the icon away without touching anything else: the switcher keeps running and the
+    /// chord keeps working. This is the way back out for someone who opened the application to
+    /// change one thing and does not want the icon left behind.
+    @objc private func hideIcon() {
+        Settings.showsMenuBarIcon = false
+        // Not synchronously: this runs from inside the menu's own tracking, and tearing the item
+        // down under it takes the menu with it mid-event.
+        DispatchQueue.main.async { MainActor.assumeIsolated { MenuBar.setVisible(false) } }
     }
 
     @objc private func openAccessibilitySettings() {
@@ -93,7 +99,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return entry
     }
 
-
+    private func entry(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        return item
+    }
 
     /// Rebuilt on every open rather than kept in sync: the counts and the grant can both change
     /// without us being told, and the menu is only ever read at the moment it is shown.
@@ -106,17 +116,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         } else {
             // Not a warning for its own sake: without the grant the panel lists applications
             // with no window names and cannot raise anything, which otherwise just looks broken.
-            let entry = NSMenuItem(title: "Needs Accessibility…",
-                                   action: #selector(openAccessibilitySettings), keyEquivalent: "")
-            entry.target = self
-            menu.addItem(entry)
-        }
-
-        if AXIsProcessTrusted() && !Thumbnails.isPermitted {
-            let entry = NSMenuItem(title: "Needs Screen Recording…",
-                                   action: #selector(requestScreenRecording), keyEquivalent: "")
-            entry.target = self
-            menu.addItem(entry)
+            menu.addItem(entry("Needs Accessibility…", #selector(openAccessibilitySettings)))
         }
 
         menu.addItem(.separator())
@@ -124,25 +124,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let shortcuts = Shortcuts.current()
         for binding in Binding.allCases {
             guard let shortcut = shortcuts[binding] else { continue }
-            let entry = NSMenuItem(title: binding.title,
-                                   action: #selector(openPreferences), keyEquivalent: "")
-            entry.target = self
+            let item = entry(binding.title, #selector(openPreferences))
             // The chord as the item's own key equivalent, so it renders right-aligned and grey
             // exactly like every other shortcut in the menu bar.
-            entry.attributedTitle = NSAttributedString(string: "\(binding.title)\t\(shortcut.label)")
-            menu.addItem(entry)
+            item.attributedTitle = NSAttributedString(string: "\(binding.title)\t\(shortcut.label)")
+            menu.addItem(item)
         }
 
         menu.addItem(.separator())
-        let change = NSMenuItem(title: "Change Shortcuts…",
-                                action: #selector(openPreferences), keyEquivalent: "")
-        change.target = self
-        menu.addItem(change)
-
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit alt-tab (until next login)",
-                              action: #selector(self.quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
+        menu.addItem(entry("Settings…", #selector(openPreferences), key: ","))
+        menu.addItem(entry("Hide This Icon", #selector(hideIcon)))
     }
 }

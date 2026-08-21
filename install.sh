@@ -8,7 +8,8 @@ LABEL="com.mr.alttab"
 DEST="$HOME/Applications/Alt-tab.app"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
-./build.sh
+# The one build path; --arch native because this machine is the only one that will run it.
+python3 build.py --arch native
 
 echo "==> Installing to $DEST"
 mkdir -p "$HOME/Applications"
@@ -28,6 +29,10 @@ cat > "$PLIST" <<PLIST_EOF
 	<key>ProgramArguments</key>
 	<array>
 		<string>$DEST/Contents/MacOS/alt-tab</string>
+		<!-- Says who started us. Without it the copy launched at login cannot tell itself
+		     apart from the one you double-clicked, and puts a settings window in your face
+		     every time you log in. -->
+		<string>--agent</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

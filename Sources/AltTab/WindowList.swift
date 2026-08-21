@@ -250,7 +250,10 @@ enum WindowList {
         // window in the Dock or behind a hidden application has no Z position at all — so they
         // go at the end, sorted by name rather than by whatever order a concurrent sweep
         // happened to finish in, which would reshuffle between two opens.
-        let offscreen = resolved.filter { $0.value.minimized || hidden[$0.value.pid] == true }
+        let offscreen = resolved.filter {
+            ($0.value.minimized && Settings.showsMinimized)
+                || (hidden[$0.value.pid] == true && Settings.showsHiddenApps)
+        }
         if !offscreen.isEmpty {
             let here = onCurrentSpace(Array(offscreen.keys))
             rows += offscreen

@@ -33,6 +33,11 @@ enum SymbolicHotKeys {
 
 let arguments = Set(CommandLine.arguments.dropFirst())
 
+/// The LaunchAgent passes `--agent`, and nothing else ever does. Told apart by who started us
+/// rather than by inspecting the session, because the two launches are otherwise identical and
+/// the difference decides whether a window appears in front of someone who only logged in.
+let startedByHand = !arguments.contains("--agent")
+
 /// Refuses to be the second copy.
 ///
 /// Two of these running is not a cosmetic problem. Carbon gives a hotkey to the first process
@@ -68,20 +73,40 @@ if arguments.contains("--render") {
     exit(0)
 }
 
+/// What a second copy says to the first before it goes: "you were opened, show yourself".
+///
+/// The reopen event above covers the ordinary case — the same bundle, opened twice. This covers
+/// the other one: a copy launched from a different path, or the bare binary, which
+/// LaunchServices does not recognise as the running application and starts for real. It cannot
+/// run, because of the lock, so it delivers the intent and leaves.
+let openedNotification = Notification.Name("com.mr.alttab.opened")
+
 guard claimSoleInstance() else {
-    FileHandle.standardError.write(Data("alt-tab: already running\n".utf8))
+    DistributedNotificationCenter.default().postNotificationName(
+        openedNotification, object: nil, userInfo: nil, deliverImmediately: true)
     exit(0)
 }
 
+/// Opening an application that is already running does not start a second copy: LaunchServices
+/// activates the one that is there and sends it a reopen event. That event is the only signal
+/// alt-tab gets, and without a delegate to catch it, double-clicking the bundle does nothing at
+/// all — which for an app whose settings window is its only face means no way in.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        PreferencesWindow.shared.show()
+        return true
+    }
+}
+
 let application = NSApplication.shared
+// Held for the process lifetime: `NSApplication.delegate` is a weak reference.
+var delegate: AppDelegate?
 // No Dock icon and no menu bar. Also what keeps alt-tab out of the window ordering it switches.
 application.setActivationPolicy(.accessory)
 
 var state = SwitcherState()
 var windows: [WindowInfo] = []
-// Held for the process lifetime: an NSStatusItem lives exactly as long as whatever owns it.
-var statusItem: StatusItemController?
-
 /// The only place both worlds meet. Everything above is AppKit, everything below is a value
 /// type that cannot import it, and nothing calls back up.
 @MainActor
@@ -138,9 +163,20 @@ func apply(_ effect: Effect) {
 // `assumeIsolated` rather than an await: this is main.swift, it is already on the main thread,
 // and the alternative is an async entry point that defers setup past the first keystroke.
 MainActor.assumeIsolated {
+    delegate = AppDelegate()
+    application.delegate = delegate
+
     Panel.warm()
     WindowList.prewarm()
-    statusItem = StatusItemController()
+    // Nothing in the menu bar unless it has been asked for. Launched at login this is the whole
+    // of alt-tab's visible presence: none.
+    MenuBar.setVisible(Settings.showsMenuBarIcon)
+
+    DistributedNotificationCenter.default().addObserver(
+        forName: openedNotification, object: nil, queue: .main
+    ) { _ in
+        MainActor.assumeIsolated { PreferencesWindow.shared.show() }
+    }
 
     guard Trigger.install({ command in dispatch(command) }) else {
         FileHandle.standardError.write(Data("alt-tab: could not register ⌥Tab — another app owns it\n".utf8))
@@ -192,7 +228,10 @@ MainActor.assumeIsolated {
     }
     // There is no Dock icon to click, so the menu bar is normally the only way in. This is the
     // other one, for when the menu bar is full.
-    if arguments.contains("--settings") {
+    // Double-clicking the bundle lands here, with no arguments and no window. The switcher
+    // launched by launchd passes none either, so the two are told apart by who started us:
+    // launchd hands its jobs a session that no Dock click ever produces.
+    if arguments.contains("--settings") || startedByHand {
         PreferencesWindow.shared.show()
     }
 }

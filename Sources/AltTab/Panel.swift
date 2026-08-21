@@ -101,9 +101,6 @@ enum Panel {
     /// releasing it is what ends the session. Same bargain as the cross: the panel names the
     /// window and leaves the switching to whoever owns the state machine.
     static var onPicked: ((WindowInfo) -> Void)?
-    /// The panel is shown late on purpose, so a ⌥Tab and release inside `revealDelay` switches
-    /// without anything appearing at all. AltTab's own default for this is 100 ms.
-    private static let revealDelay = 0.1
     private static var reveal: Timer?
 
     /// Pays for the window, the view tree and the icon cache before anything is asked of them.
@@ -128,7 +125,10 @@ enum Panel {
         // faster than the delay is one the eye never had time to want a panel for, and the
         // flash of one is worse than no panel at all.
         reveal?.invalidate()
-        reveal = Timer.scheduledTimer(withTimeInterval: revealDelay, repeats: false) { _ in
+        // Shown late on purpose, so a ⌥Tab and release inside the delay switches without
+        // anything appearing at all. Read per open rather than held, so the slider in the
+        // settings takes effect on the next switch instead of the next launch.
+        reveal = Timer.scheduledTimer(withTimeInterval: Settings.revealDelay, repeats: false) { _ in
             MainActor.assumeIsolated {
                 // Order in before activating. Activating first would pull us to whichever Space
                 // macOS last associated this app with; putting the window up first means the
@@ -596,7 +596,7 @@ enum Panel {
         }
 
         override func mouseEntered(with event: NSEvent) {
-            showCross(true)
+            showCross(Settings.showsCloseButton)
             setHovered(true)
         }
 
