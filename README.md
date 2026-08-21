@@ -8,6 +8,13 @@ in most-recently-used order, with its own title and a picture of itself.
 
 Hold ⌥ and press Tab. Let ⌥ go and you are there. That is the whole product.
 
+**⌥Tab, and not ⌘Tab, on purpose.** Taking ⌘Tab would mean switching the system's own switcher
+off, and that is a setting which outlives the app that changed it — uninstall carelessly and
+the machine is left with no switcher at all. So alt-tab binds a chord nobody owns and leaves
+yours alone: both are there, you can use one and then the other on the same desktop and decide
+which you actually want. If that turns out to be this one, the shortcut is yours to change in
+the settings — including to ⌘Tab, once you mean it.
+
 ## Install
 
 **Download** the latest release, unzip it, and move `Alt-tab.app` to `~/Applications`.
